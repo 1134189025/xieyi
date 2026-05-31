@@ -37,12 +37,12 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <div className="flex h-screen bg-gray-100">
-      <aside className="w-64 bg-white shadow-lg flex flex-col">
-        <div className="p-6 border-b">
-          <h1 className="text-xl font-bold text-indigo-600">Pix 协议支付</h1>
-          <p className="text-sm text-gray-500 mt-1">{user?.displayName ?? user?.username}</p>
-          <span className="inline-block mt-1 px-2 py-0.5 text-xs font-medium rounded bg-indigo-100 text-indigo-700">
+    <div className="flex h-screen bg-app-body text-app-primary">
+      <aside className="flex w-64 flex-col border-r border-app-border bg-app-surface shadow-checkout">
+        <div className="border-b border-app-border p-6">
+          <h1 className="text-xl font-extrabold tracking-tight text-app-primary">Pix 协议支付</h1>
+          <p className="mt-1 text-sm text-app-secondary">{user?.displayName ?? user?.username}</p>
+          <span className="mt-2 inline-block rounded-full border border-app-border bg-white px-2 py-0.5 text-xs font-medium text-app-secondary">
             {roleLabel(user?.role)}
           </span>
         </div>
@@ -58,8 +58,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                 className={clsx(
                   'flex items-center gap-3 px-6 py-3 text-sm font-medium transition-colors',
                   active
-                    ? 'bg-indigo-50 text-indigo-700 border-r-3 border-indigo-700'
-                    : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900',
+                    ? 'border-r-4 border-app-accent bg-neutral-100 text-app-primary'
+                    : 'text-app-secondary hover:bg-neutral-50 hover:text-app-primary',
                 )}
               >
                 <Icon size={18} />
@@ -69,10 +69,10 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           })}
         </nav>
 
-        <div className="p-4 border-t">
+        <div className="border-t border-app-border p-4">
           <button
             onClick={handleLogout}
-            className="flex items-center gap-2 w-full px-4 py-2 text-sm text-gray-600 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+            className="flex w-full items-center gap-2 rounded-lg px-4 py-2 text-sm text-app-secondary transition-colors hover:bg-red-50 hover:text-red-600"
           >
             <LogOut size={16} />
             退出登录

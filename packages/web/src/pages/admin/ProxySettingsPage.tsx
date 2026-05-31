@@ -72,25 +72,25 @@ export default function ProxySettingsPage() {
   return (
     <Layout>
       <div className="mb-6">
-        <h2 className="text-2xl font-bold text-gray-900">代理设置</h2>
-        <p className="text-sm text-gray-500 mt-1">
+        <h2 className="text-2xl font-bold text-app-primary">代理设置</h2>
+        <p className="mt-1 text-sm text-app-secondary">
           这里配置的 HTTP/HTTPS 代理会同时用于 ChatGPT 结算长链接和 Stripe Pix 协议请求。
         </p>
       </div>
 
       {loading ? (
         <div className="flex justify-center py-20">
-          <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
+          <Loader2 className="h-8 w-8 animate-spin text-app-accent" />
         </div>
       ) : error ? (
-        <div className="bg-white rounded-xl shadow-sm border p-10 text-center text-gray-500">{error}</div>
+        <div className="rounded-xl border border-app-border bg-app-surface p-10 text-center text-app-secondary shadow-checkout">{error}</div>
       ) : (
-        <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-          <div className="xl:col-span-2 bg-white rounded-xl shadow-sm border p-6">
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+          <div className="rounded-xl border border-app-border bg-app-surface p-6 shadow-checkout xl:col-span-2">
             <h3 className="text-lg font-semibold mb-4">全局代理</h3>
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
-                <label className="block text-sm text-gray-600 mb-1">代理地址</label>
+                <label className="mb-1 block text-sm text-app-secondary">代理地址</label>
                 <input
                   type="text"
                   value={proxy}
@@ -98,9 +98,9 @@ export default function ProxySettingsPage() {
                   placeholder="host:port:username:password"
                   autoComplete="off"
                   spellCheck={false}
-                  className="w-full px-3 py-2 border rounded-lg font-mono text-sm"
+                  className="w-full rounded-lg border border-app-border px-3 py-2 font-mono text-sm outline-none focus:border-app-accent"
                 />
-                <p className="text-xs text-gray-400 mt-2">
+                <p className="mt-2 text-xs text-app-secondary">
                   示例：proxy.example:10000:proxy-user-zone-custom-region-JP-session-demo-sessTime-5-sessAuto-1:proxy-pass
                 </p>
               </div>
@@ -109,7 +109,7 @@ export default function ProxySettingsPage() {
                 <button
                   type="submit"
                   disabled={saving}
-                  className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+                  className="flex items-center gap-2 rounded-lg bg-app-accent px-4 py-2 text-white hover:bg-app-accentHover disabled:opacity-50"
                 >
                   {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
                   保存代理
@@ -118,7 +118,7 @@ export default function ProxySettingsPage() {
                   type="button"
                   onClick={handleClear}
                   disabled={saving || !setting.enabled}
-                  className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 disabled:opacity-50"
+                  className="flex items-center gap-2 rounded-lg bg-neutral-100 px-4 py-2 text-app-primary hover:bg-neutral-200 disabled:opacity-50"
                 >
                   <Trash2 size={16} />
                   清空代理
@@ -127,30 +127,30 @@ export default function ProxySettingsPage() {
             </form>
           </div>
 
-          <div className="bg-white rounded-xl shadow-sm border p-6">
+          <div className="rounded-xl border border-app-border bg-app-surface p-6 shadow-checkout">
             <h3 className="text-lg font-semibold mb-4">当前状态</h3>
             <div className="space-y-3 text-sm">
               <div className="flex justify-between gap-4">
-                <span className="text-gray-500">状态</span>
-                <span className={setting.enabled ? 'text-green-600 font-medium' : 'text-gray-500'}>
+                <span className="text-app-secondary">状态</span>
+                <span className={setting.enabled ? 'text-green-600 font-medium' : 'text-app-secondary'}>
                   {setting.enabled ? '已启用' : '未启用'}
                 </span>
               </div>
               <div className="flex justify-between gap-4">
-                <span className="text-gray-500">Host</span>
+                <span className="text-app-secondary">Host</span>
                 <span className="font-mono text-right break-all">{setting.host ?? '-'}</span>
               </div>
               <div className="flex justify-between gap-4">
-                <span className="text-gray-500">端口</span>
+                <span className="text-app-secondary">端口</span>
                 <span>{setting.port ?? '-'}</span>
               </div>
               <div className="flex justify-between gap-4">
-                <span className="text-gray-500">用户名</span>
+                <span className="text-app-secondary">用户名</span>
                 <span className="font-mono text-right break-all">{setting.username ?? '-'}</span>
               </div>
               <div>
-                <span className="block text-gray-500 mb-1">脱敏代理</span>
-                <span className="block font-mono text-xs bg-gray-50 rounded-lg p-3 break-all">
+                <span className="mb-1 block text-app-secondary">脱敏代理</span>
+                <span className="block break-all rounded-lg bg-neutral-50 p-3 font-mono text-xs">
                   {setting.maskedProxy ?? '未配置'}
                 </span>
               </div>

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { publicApi } from '../../api/client';
 import toast from 'react-hot-toast';
@@ -7,12 +7,31 @@ import { safeErrorMessage } from '../../utils/labels';
 export default function SubmitOrderPage() {
   const [redemptionCode, setRedemptionCode] = useState('');
   const [session, setSession] = useState('');
+  const [acceptedProtocol, setAcceptedProtocol] = useState(false);
+  const [protocolError, setProtocolError] = useState('');
   const [loading, setLoading] = useState(false);
   const [step, setStep] = useState('');
+  const protocolSectionRef = useRef<HTMLLabelElement>(null);
   const navigate = useNavigate();
+
+  const triggerProtocolError = () => {
+    setProtocolError('请先确认已核对信息并同意继续创建支付订单');
+    const protocolSection = protocolSectionRef.current;
+    if (!protocolSection) return;
+
+    protocolSection.classList.remove('shake-active');
+    void protocolSection.offsetWidth;
+    protocolSection.classList.add('shake-active');
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (!acceptedProtocol) {
+      triggerProtocolError();
+      return;
+    }
+
     setLoading(true);
 
     try {
@@ -34,17 +53,25 @@ export default function SubmitOrderPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-indigo-50 to-blue-100 flex items-center justify-center p-4">
-      <div className="w-full max-w-lg bg-white rounded-2xl shadow-xl overflow-hidden">
-        <div className="bg-gradient-to-r from-indigo-600 to-blue-600 px-8 py-8 text-center">
-          <h1 className="text-2xl font-bold text-white">Pix 协议支付</h1>
-          <p className="text-indigo-100 mt-2">输入兑换码和 ChatGPT Session 后生成 Pix 二维码</p>
-        </div>
+    <div className="checkout-shell">
+      <div className="checkout-container">
+        <form onSubmit={handleSubmit} className="checkout-content">
+          <div className="checkout-brand-row">
+            <div className="checkout-brand-mark">P</div>
+            <div className="checkout-pill">安全收银台</div>
+          </div>
 
-        <form onSubmit={handleSubmit} className="p-8 space-y-6">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">兑换码</label>
+          <h1 className="checkout-title">创建 Pix 支付订单</h1>
+          <p className="checkout-lead">
+            输入兑换码和 ChatGPT Session，系统会验证资格并生成 Pix 二维码。
+          </p>
+
+          <div className="checkout-field">
+            <label className="checkout-label" htmlFor="redemption-code">
+              兑换码
+            </label>
             <input
+              id="redemption-code"
               type="text"
               value={redemptionCode}
               onChange={(e) => setRedemptionCode(e.target.value.toUpperCase())}
@@ -52,18 +79,16 @@ export default function SubmitOrderPage() {
               required
               autoComplete="off"
               spellCheck={false}
-              className="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none font-mono text-lg tracking-wider text-center"
+              className="checkout-input"
             />
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+          <div className="checkout-field">
+            <label className="checkout-label" htmlFor="session">
               ChatGPT Session
-              <span className="text-gray-400 font-normal ml-1">
-                （完整 session JSON、accessToken 或 session cookie）
-              </span>
             </label>
             <textarea
+              id="session"
               value={session}
               onChange={(e) => setSession(e.target.value)}
               placeholder="粘贴完整 session JSON、accessToken（3 段 eyJ...）或 session cookie"
@@ -71,31 +96,56 @@ export default function SubmitOrderPage() {
               rows={4}
               autoComplete="off"
               spellCheck={false}
-              className="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-xs font-mono resize-none"
+              className="checkout-textarea"
             />
           </div>
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full py-3 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+          <label
+            ref={protocolSectionRef}
+            className="checkbox-wrapper protocol-section"
+            onAnimationEnd={(e) => e.currentTarget.classList.remove('shake-active')}
           >
+            <input
+              type="checkbox"
+              checked={acceptedProtocol}
+              aria-describedby={protocolError ? 'protocol-error' : undefined}
+              aria-invalid={protocolError ? 'true' : undefined}
+              onChange={(e) => {
+                setAcceptedProtocol(e.target.checked);
+                if (e.target.checked) setProtocolError('');
+              }}
+            />
+            <span className="custom-checkbox" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+            </span>
+            <span>我确认已核对兑换码和 Session 信息，并同意继续创建支付订单。</span>
+          </label>
+
+          {protocolError && (
+            <p id="protocol-error" className="protocol-error">
+              {protocolError}
+            </p>
+          )}
+
+          <button type="submit" disabled={loading} className="checkout-button">
             {loading ? step || '处理中...' : '提交订单'}
           </button>
 
           {loading && (
-            <div className="text-center">
-              <div className="inline-block w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
-              <p className="text-sm text-gray-500 mt-2">{step || '请稍候...'}</p>
+            <div className="view-section mt-5 text-center">
+              <div className="mx-auto h-6 w-6 animate-spin rounded-full border-2 border-app-accent border-t-transparent" />
+              <p className="mt-2 text-sm text-app-secondary">{step || '请稍候...'}</p>
             </div>
           )}
-        </form>
 
-        <div className="px-8 pb-6 text-center">
-          <Link to="/login" className="text-sm text-indigo-600 hover:underline">
-            工作人员登录
-          </Link>
-        </div>
+          <div className="mt-5 text-center">
+            <Link to="/login" className="checkout-link">
+              工作人员入口
+            </Link>
+          </div>
+        </form>
       </div>
     </div>
   );

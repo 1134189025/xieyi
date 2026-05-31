@@ -13,7 +13,7 @@ export default function QrCodeDisplay({ pixCode, pixQrPngBase64, pixImageUrl, pi
   const [copied, setCopied] = useState(false);
 
   if (!pixCode) {
-    return <p className="text-gray-500 text-center">暂无 Pix 付款码</p>;
+    return <p className="text-center text-app-secondary">暂无 Pix 付款码</p>;
   }
 
   const imageSrc = pixQrPngBase64
@@ -32,24 +32,28 @@ export default function QrCodeDisplay({ pixCode, pixQrPngBase64, pixImageUrl, pi
   };
 
   return (
-    <div className="flex flex-col items-center gap-4">
+    <div className="flex flex-col items-stretch gap-4">
       {imageSrc && (
-        <img src={imageSrc} alt="Pix 二维码" className="w-64 h-64 border rounded-lg" />
+        <div className="pix-qr-shell">
+          <img src={imageSrc} alt="Pix 二维码" className="pix-qr-image" />
+        </div>
       )}
 
-      <div className="w-full max-w-md">
-        <label className="block text-sm font-medium text-gray-700 mb-1">Pix 付款码</label>
-        <div className="flex gap-2">
+      <div>
+        <label className="checkout-label">Pix 付款码</label>
+        <div className="pix-code-row">
           <input
             type="text"
             readOnly
             value={pixCode}
-            className="flex-1 text-xs px-3 py-2 border rounded-lg bg-gray-50 font-mono"
+            className="pix-code-input"
             onClick={(e) => (e.target as HTMLInputElement).select()}
           />
           <button
+            type="button"
             onClick={handleCopy}
-            className="px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+            className="checkout-icon-button"
+            aria-label="复制 Pix 付款码"
           >
             {copied ? <Check size={16} /> : <Copy size={16} />}
           </button>
@@ -57,9 +61,12 @@ export default function QrCodeDisplay({ pixCode, pixQrPngBase64, pixImageUrl, pi
       </div>
 
       {pixExpiresAt && (
-        <p className="text-sm text-gray-500">
-          过期时间：{new Date(pixExpiresAt).toLocaleString('zh-CN')}
-        </p>
+        <div className="flex justify-between border-t border-app-border pt-4 text-sm">
+          <span className="text-app-secondary">过期时间</span>
+          <strong className="text-app-primary">
+            {new Date(pixExpiresAt).toLocaleString('zh-CN')}
+          </strong>
+        </div>
       )}
     </div>
   );
