@@ -36,6 +36,7 @@ const ERROR_CODE_LABELS: Record<string, string> = {
   CHATGPT_CHECKOUT_FAILED: '无法创建 ChatGPT 结算链接，请稍后重试',
   ACCOUNT_NOT_ELIGIBLE: '账号无资格，无法生成 Pix 支付',
   ORDER_STATE_CHANGED: '订单状态已变化，请重新提交或联系管理员',
+  ORDER_CREATE_BUSY: '订单创建繁忙，请稍后重试',
   UPSTREAM_TIMEOUT: '外部服务请求超时，请稍后重试',
   RATE_LIMITED: '请求过于频繁，请稍后再试',
   INTERNAL_ERROR: '服务器内部错误，请稍后重试',
