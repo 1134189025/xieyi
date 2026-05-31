@@ -2,13 +2,24 @@ import { nanoid } from 'nanoid';
 import { prisma } from '../db.ts';
 import { AppError } from '../middleware/error-handler.ts';
 import { encrypt } from '../utils/crypto.ts';
-import { resolveAccessToken, createCheckoutUrl } from './chatgpt-session.service.ts';
+import { parseChatGptSessionInput, resolveAccessToken, createCheckoutUrl } from './chatgpt-session.service.ts';
 import { generatePixPayment } from './pix-payment.service.ts';
 import { broadcastOrderNew, broadcastOrderStatusChange } from '../ws/index.ts';
 
 const SAFE_PAYMENT_ERROR_MESSAGE = '支付创建失败，请稍后重试';
+const ORDER_STATE_CHANGED_MESSAGE = '订单状态已变化，请重新提交或联系管理员';
+const SAFE_PAYMENT_ERROR_CODES = new Set([
+  'PAYMENT_FAILED',
+  'CHATGPT_SESSION_FAILED',
+  'CHATGPT_CHECKOUT_FAILED',
+  'UPSTREAM_TIMEOUT',
+  'CHATGPT_SESSION_UNRECOGNIZED',
+  'ORDER_STATE_CHANGED',
+]);
 
 export async function createOrder(redemptionCode: string, session: string) {
+  const chatGptCredential = parseChatGptSessionInput(session);
+
   const trackingToken = nanoid(12);
   const encryptedSession = encrypt(session);
 
@@ -45,7 +56,7 @@ export async function createOrder(redemptionCode: string, session: string) {
   });
 
   try {
-    const accessToken = await resolveAccessToken(session);
+    const accessToken = await resolveAccessToken(chatGptCredential);
     const checkoutUrl = await createCheckoutUrl(accessToken);
     const { stripeResult, profile, qrPngBuffer } = await generatePixPayment(checkoutUrl);
 
@@ -53,9 +64,7 @@ export async function createOrder(redemptionCode: string, session: string) {
       ? new Date(stripeResult.pix.expiresAt * 1000)
       : null;
 
-    order = await prisma.order.update({
-      where: { id: order.id },
-      data: {
+    const pendingOrderData = {
         status: 'PENDING_PAYMENT',
         checkoutSessionId: stripeResult.checkoutSessionId,
         checkoutUrl,
@@ -66,8 +75,20 @@ export async function createOrder(redemptionCode: string, session: string) {
         pixImageUrl: stripeResult.pix.imageUrlPng,
         billingProfileJson: profile as object,
         encryptedSessionData: null,
-      },
+    } as const;
+
+    const changed = await prisma.order.updateMany({
+      where: { id: order.id, status: 'CREATING_PAYMENT' },
+      data: pendingOrderData,
     });
+
+    if (changed.count === 0) {
+      throw new AppError(409, ORDER_STATE_CHANGED_MESSAGE, 'ORDER_STATE_CHANGED');
+    }
+
+    const updatedOrder = await prisma.order.findUnique({ where: { id: order.id } });
+    if (!updatedOrder) throw new AppError(502, SAFE_PAYMENT_ERROR_MESSAGE, 'PAYMENT_FAILED');
+    order = updatedOrder;
 
     broadcastOrderNew(order);
 
@@ -81,17 +102,45 @@ export async function createOrder(redemptionCode: string, session: string) {
     };
   } catch (error) {
     console.error('Payment creation failed:', error);
-    await prisma.order.update({
-      where: { id: order.id },
-      data: {
-        status: 'FAILED',
-        errorMessage: SAFE_PAYMENT_ERROR_MESSAGE,
-        encryptedSessionData: null,
-      },
+    await releaseCreatingPaymentOrder(order.id, order.redemptionCodeId);
+
+    throw toPublicPaymentCreationError(error);
+  }
+}
+
+async function releaseCreatingPaymentOrder(orderId: string, redemptionCodeId: string) {
+  await prisma.$transaction(async (tx) => {
+    const deleted = await tx.order.deleteMany({
+      where: { id: orderId, status: 'CREATING_PAYMENT' },
     });
 
-    throw new AppError(502, SAFE_PAYMENT_ERROR_MESSAGE, 'PAYMENT_FAILED');
+    if (deleted.count > 0) {
+      await tx.redemptionCode.update({
+        where: { id: redemptionCodeId },
+        data: { usedAt: null },
+      });
+    }
+  });
+}
+
+function toPublicPaymentCreationError(error: unknown): AppError {
+  if (error instanceof AppError) {
+    return error.code && SAFE_PAYMENT_ERROR_CODES.has(error.code)
+      ? error
+      : new AppError(502, SAFE_PAYMENT_ERROR_MESSAGE, 'PAYMENT_FAILED');
   }
+
+  const candidate = error as { statusCode?: unknown; code?: unknown; message?: unknown };
+  if (
+    typeof candidate.statusCode === 'number' &&
+    typeof candidate.code === 'string' &&
+    SAFE_PAYMENT_ERROR_CODES.has(candidate.code) &&
+    typeof candidate.message === 'string'
+  ) {
+    return new AppError(candidate.statusCode, candidate.message, candidate.code);
+  }
+
+  return new AppError(502, SAFE_PAYMENT_ERROR_MESSAGE, 'PAYMENT_FAILED');
 }
 
 export async function getOrderByTrackingToken(trackingToken: string) {

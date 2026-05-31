@@ -59,12 +59,14 @@ export default function SubmitOrderPage() {
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               ChatGPT Session
-              <span className="text-gray-400 font-normal ml-1">（accessToken 或 session cookie）</span>
+              <span className="text-gray-400 font-normal ml-1">
+                （完整 session JSON、accessToken 或 session cookie）
+              </span>
             </label>
             <textarea
               value={session}
               onChange={(e) => setSession(e.target.value)}
-              placeholder="粘贴 accessToken（eyJ...）或 session cookie"
+              placeholder="粘贴完整 session JSON、accessToken（3 段 eyJ...）或 session cookie"
               required
               rows={4}
               autoComplete="off"
