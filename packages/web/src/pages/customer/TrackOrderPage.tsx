@@ -46,21 +46,23 @@ export default function TrackOrderPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
+      <div className="checkout-shell">
+        <Loader2 className="h-8 w-8 animate-spin text-app-accent" />
       </div>
     );
   }
 
   if (error || !order) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-center">
-          <AlertCircle className="w-16 h-16 text-red-400 mx-auto mb-4" />
-          <p className="text-lg text-gray-600">{error || '未找到订单'}</p>
-          <Link to="/" className="mt-4 inline-block text-indigo-600 hover:underline">
+      <div className="checkout-shell">
+        <div className="checkout-container">
+          <div className="checkout-content text-center">
+            <AlertCircle className="mx-auto mb-4 h-16 w-16 text-app-error" />
+            <p className="text-lg text-app-secondary">{error || '未找到订单'}</p>
+            <Link to="/" className="checkout-link mt-4">
             返回首页
-          </Link>
+            </Link>
+          </div>
         </div>
       </div>
     );
@@ -73,56 +75,62 @@ export default function TrackOrderPage() {
   const isClosed = order.status === 'EXPIRED' || order.status === 'CANCELLED';
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-indigo-50 to-blue-100 flex items-center justify-center p-4">
-      <div className="w-full max-w-lg bg-white rounded-2xl shadow-xl overflow-hidden">
-        <div className="bg-gradient-to-r from-indigo-600 to-blue-600 px-8 py-6 text-center">
-          <h1 className="text-xl font-bold text-white">订单状态</h1>
-          <p className="text-indigo-200 text-sm mt-1 font-mono">{order.trackingToken}</p>
-        </div>
-
-        <div className="p-8">
-          <div className="text-center mb-6">
+    <div className="checkout-shell">
+      <div className="checkout-container">
+        <div className="checkout-content">
+          <div className="checkout-brand-row">
+            <div>
+              <h1 className="checkout-title">{isPending ? '等待 Pix 付款' : '订单状态'}</h1>
+              <p className="mt-2 font-mono text-xs text-app-secondary">{order.trackingToken}</p>
+            </div>
             <StatusBadge status={order.status} />
-            <p className="text-sm text-gray-500 mt-2">
-              创建时间：{new Date(order.createdAt).toLocaleString('zh-CN')}
-            </p>
           </div>
 
+          <p className="checkout-lead">
+            创建时间：{new Date(order.createdAt).toLocaleString('zh-CN')}
+          </p>
+
           {isCompleted && (
-            <div className="flex flex-col items-center gap-4 py-8">
-              <CheckCircle className="w-20 h-20 text-green-500" />
-              <h2 className="text-xl font-bold text-green-700">支付已完成</h2>
+            <div className="view-section py-8 text-center">
+              <div className="success-icon">
+                <CheckCircle />
+              </div>
+              <h2 className="text-2xl font-extrabold tracking-tight text-app-primary">支付已完成</h2>
+              <p className="mt-2 text-sm text-app-secondary">Pix 付款已经确认，订单状态已同步更新。</p>
               {order.completedAt && (
-                <p className="text-sm text-gray-500">
-                  完成时间：{new Date(order.completedAt).toLocaleString('zh-CN')}
-                </p>
+                <div className="mt-6 flex justify-between border-t border-app-border pt-4 text-sm">
+                  <span className="text-app-secondary">完成时间</span>
+                  <strong className="text-app-primary">
+                    {new Date(order.completedAt).toLocaleString('zh-CN')}
+                  </strong>
+                </div>
               )}
+              <Link to="/" className="checkout-button mt-6 inline-block text-center">
+                提交新订单
+              </Link>
             </div>
           )}
 
           {isFailed && (
-            <div className="flex flex-col items-center gap-4 py-8">
-              <AlertCircle className="w-20 h-20 text-red-400" />
-              <h2 className="text-lg font-bold text-red-700">订单失败</h2>
+            <div className="view-section py-8 text-center">
+              <AlertCircle className="mx-auto h-16 w-16 text-app-error" />
+              <h2 className="mt-4 text-xl font-extrabold text-app-primary">订单失败</h2>
               {order.errorMessage && (
-                <p className="text-sm text-gray-500 text-center max-w-sm">{order.errorMessage}</p>
+                <p className="mx-auto mt-2 max-w-sm text-sm text-app-secondary">{order.errorMessage}</p>
               )}
             </div>
           )}
 
           {isCreating && (
-            <div className="flex flex-col items-center gap-4 py-8">
-              <Loader2 className="w-12 h-12 animate-spin text-indigo-600" />
-              <p className="text-sm text-gray-600">正在生成 Pix 二维码，请稍候...</p>
+            <div className="view-section py-8 text-center">
+              <Loader2 className="mx-auto h-12 w-12 animate-spin text-app-accent" />
+              <p className="mt-4 text-sm text-app-secondary">正在生成 Pix 二维码，请稍候...</p>
             </div>
           )}
 
           {isPending && (
-            <div>
-              <div className="flex items-center justify-center gap-2 mb-6">
-                <div className="w-3 h-3 bg-yellow-400 rounded-full animate-pulse" />
-                <span className="text-sm text-gray-600">等待工人扫码付款...</span>
-              </div>
+            <div className="view-section">
+              <p className="checkout-lead">请让工人扫描二维码，或复制 Pix 付款码完成付款确认。</p>
               <QrCodeDisplay
                 pixCode={order.pixCode}
                 pixQrPngBase64={order.pixQrPngBase64}
@@ -133,17 +141,19 @@ export default function TrackOrderPage() {
           )}
 
           {isClosed && (
-            <div className="flex flex-col items-center gap-4 py-8">
-              <AlertCircle className="w-16 h-16 text-gray-400" />
-              <p className="text-sm text-gray-600">订单已关闭，无法继续支付。</p>
+            <div className="view-section py-8 text-center">
+              <AlertCircle className="mx-auto h-16 w-16 text-app-secondary" />
+              <p className="mt-4 text-sm text-app-secondary">订单已关闭，无法继续支付。</p>
             </div>
           )}
-        </div>
 
-        <div className="px-8 pb-6 text-center">
-          <Link to="/" className="text-sm text-indigo-600 hover:underline">
-            提交新订单
-          </Link>
+          {!isCompleted && (
+            <div className="mt-6 text-center">
+              <Link to="/" className="checkout-link">
+                提交新订单
+              </Link>
+            </div>
+          )}
         </div>
       </div>
     </div>

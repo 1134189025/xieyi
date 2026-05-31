@@ -78,31 +78,31 @@ export default function WorkerDashboard() {
   return (
     <Layout>
       <div className="mb-6">
-        <h2 className="text-2xl font-bold text-gray-900">待处理订单</h2>
-        <p className="text-gray-500 mt-1">{orders.length} 个订单等待付款</p>
+        <h2 className="text-2xl font-bold text-app-primary">待处理订单</h2>
+        <p className="mt-1 text-app-secondary">{orders.length} 个订单等待付款</p>
       </div>
 
       {loading ? (
         <div className="flex justify-center py-20">
-          <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
+          <Loader2 className="h-8 w-8 animate-spin text-app-accent" />
         </div>
       ) : orders.length === 0 ? (
-        <div className="text-center py-20">
-          <QrCode className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-          <p className="text-lg text-gray-500">暂无待处理订单</p>
+        <div className="py-20 text-center">
+          <QrCode className="mx-auto mb-4 h-16 w-16 text-neutral-300" />
+          <p className="text-lg text-app-secondary">暂无待处理订单</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
           {orders.map((order) => (
-            <div key={order.id} className="bg-white rounded-xl shadow-sm border p-6">
-              <div className="flex justify-between items-start mb-4">
+            <div key={order.id} className="rounded-xl border border-app-border bg-app-surface p-6 shadow-checkout">
+              <div className="mb-4 flex items-start justify-between">
                 <div>
-                  <p className="text-xs text-gray-400 font-mono">{order.trackingToken}</p>
-                  <p className="text-xs text-gray-400 mt-1">
+                  <p className="font-mono text-xs text-app-secondary">{order.trackingToken}</p>
+                  <p className="mt-1 text-xs text-app-secondary">
                     {new Date(order.createdAt).toLocaleString('zh-CN')}
                   </p>
                 </div>
-                <span className="px-2 py-0.5 text-xs bg-yellow-100 text-yellow-700 rounded-full">
+                <span className="rounded-full border border-[#e7dfca] bg-[#fffaf0] px-2 py-0.5 text-xs text-[#6b4e16]">
                   待支付
                 </span>
               </div>
@@ -117,7 +117,7 @@ export default function WorkerDashboard() {
               <button
                 onClick={() => handleComplete(order.id)}
                 disabled={completing === order.id}
-                className="mt-4 w-full flex items-center justify-center gap-2 py-3 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 disabled:opacity-50 transition-colors"
+                className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-app-accent py-3 font-medium text-white transition-colors hover:bg-app-accentHover disabled:opacity-50"
               >
                 {completing === order.id ? (
                   <Loader2 size={16} className="animate-spin" />

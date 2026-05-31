@@ -62,57 +62,57 @@ export default function OrdersPage() {
 
   return (
     <Layout>
-      <h2 className="text-2xl font-bold text-gray-900 mb-6">订单管理</h2>
+      <h2 className="mb-6 text-2xl font-bold text-app-primary">订单管理</h2>
 
-      <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
-        <div className="px-6 py-4 border-b flex items-center gap-4 flex-wrap">
-          <span className="text-sm text-gray-500">状态：</span>
+      <div className="overflow-hidden rounded-xl border border-app-border bg-app-surface shadow-checkout">
+        <div className="flex flex-wrap items-center gap-4 border-b border-app-border px-6 py-4">
+          <span className="text-sm text-app-secondary">状态：</span>
           {statuses.map((s) => (
             <button
               key={s}
               onClick={() => { setStatusFilter(s); setPage(1); }}
               className={`px-3 py-1 text-sm rounded-full ${
-                statusFilter === s ? 'bg-indigo-100 text-indigo-700' : 'text-gray-500 hover:bg-gray-100'
+                statusFilter === s ? 'bg-app-accent text-white' : 'text-app-secondary hover:bg-neutral-100'
               }`}
             >
               {s ? orderStatusLabel(s) : '全部'}
             </button>
           ))}
-          <span className="ml-auto text-sm text-gray-400">共 {total} 条</span>
+          <span className="ml-auto text-sm text-app-secondary">共 {total} 条</span>
         </div>
 
         {loading ? (
           <div className="flex justify-center py-10">
-            <Loader2 className="w-6 h-6 animate-spin text-indigo-600" />
+            <Loader2 className="h-6 w-6 animate-spin text-app-accent" />
           </div>
         ) : error ? (
-          <div className="py-10 text-center text-gray-500">{error}</div>
+          <div className="py-10 text-center text-app-secondary">{error}</div>
         ) : (
           <table className="w-full text-sm">
-            <thead className="bg-gray-50">
+            <thead className="bg-neutral-50">
               <tr>
-                <th className="px-6 py-3 text-left font-medium text-gray-500">追踪码</th>
-                <th className="px-6 py-3 text-left font-medium text-gray-500">状态</th>
-                <th className="px-6 py-3 text-left font-medium text-gray-500">工人</th>
-                <th className="px-6 py-3 text-left font-medium text-gray-500">创建时间</th>
-                <th className="px-6 py-3 text-left font-medium text-gray-500">完成时间</th>
-                <th className="px-6 py-3 text-right font-medium text-gray-500">操作</th>
+                <th className="px-6 py-3 text-left font-medium text-app-secondary">追踪码</th>
+                <th className="px-6 py-3 text-left font-medium text-app-secondary">状态</th>
+                <th className="px-6 py-3 text-left font-medium text-app-secondary">工人</th>
+                <th className="px-6 py-3 text-left font-medium text-app-secondary">创建时间</th>
+                <th className="px-6 py-3 text-left font-medium text-app-secondary">完成时间</th>
+                <th className="px-6 py-3 text-right font-medium text-app-secondary">操作</th>
               </tr>
             </thead>
-            <tbody className="divide-y">
+            <tbody className="divide-y divide-app-border">
               {orders.map((order) => (
-                <tr key={order.id} className="hover:bg-gray-50">
+                <tr key={order.id} className="hover:bg-neutral-50">
                   <td className="px-6 py-3 font-mono text-xs">{order.trackingToken}</td>
                   <td className="px-6 py-3">
                     <StatusBadge status={order.status} />
                   </td>
-                  <td className="px-6 py-3 text-gray-500">
+                  <td className="px-6 py-3 text-app-secondary">
                     {order.completedBy?.displayName ?? '-'}
                   </td>
-                  <td className="px-6 py-3 text-gray-500">
+                  <td className="px-6 py-3 text-app-secondary">
                     {new Date(order.createdAt).toLocaleString('zh-CN')}
                   </td>
-                  <td className="px-6 py-3 text-gray-500">
+                  <td className="px-6 py-3 text-app-secondary">
                     {order.completedAt
                       ? new Date(order.completedAt).toLocaleString('zh-CN')
                       : '-'}
@@ -135,13 +135,13 @@ export default function OrdersPage() {
         )}
 
         {totalPages > 1 && (
-          <div className="px-6 py-4 border-t flex justify-center gap-2">
+          <div className="flex justify-center gap-2 border-t border-app-border px-6 py-4">
             {Array.from({ length: Math.min(totalPages, 10) }, (_, i) => i + 1).map((p) => (
               <button
                 key={p}
                 onClick={() => setPage(p)}
                 className={`px-3 py-1 text-sm rounded ${
-                  page === p ? 'bg-indigo-600 text-white' : 'text-gray-500 hover:bg-gray-100'
+                  page === p ? 'bg-app-accent text-white' : 'text-app-secondary hover:bg-neutral-100'
                 }`}
               >
                 {p}

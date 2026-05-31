@@ -26,38 +26,46 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-indigo-50 to-blue-100">
-      <div className="w-full max-w-md bg-white rounded-2xl shadow-xl overflow-hidden">
-        <div className="bg-gradient-to-r from-indigo-600 to-blue-600 px-8 py-8 text-center">
-          <h1 className="text-2xl font-bold text-white">Pix 协议支付平台</h1>
-          <p className="text-indigo-100 mt-2">工作人员登录</p>
-        </div>
-        <form onSubmit={handleSubmit} className="p-8 space-y-6">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">用户名</label>
+    <div className="checkout-shell">
+      <div className="checkout-container max-w-md">
+        <form onSubmit={handleSubmit} className="checkout-content">
+          <div className="checkout-brand-row">
+            <div className="checkout-brand-mark">P</div>
+            <div className="checkout-pill">工作人员登录</div>
+          </div>
+
+          <h1 className="checkout-title">Pix 协议支付平台</h1>
+          <p className="checkout-lead">请输入账号密码进入工作台。</p>
+
+          <div className="checkout-field">
+            <label className="checkout-label" htmlFor="username">
+              用户名
+            </label>
             <input
+              id="username"
               type="text"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               required
-              className="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+              className="checkout-input text-left text-base tracking-normal"
             />
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">密码</label>
+
+          <div className="checkout-field">
+            <label className="checkout-label" htmlFor="password">
+              密码
+            </label>
             <input
+              id="password"
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
-              className="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+              className="checkout-input text-left text-base tracking-normal"
             />
           </div>
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full py-3 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors"
-          >
+
+          <button type="submit" disabled={loading} className="checkout-button">
             {loading ? '正在登录...' : '登录'}
           </button>
         </form>
