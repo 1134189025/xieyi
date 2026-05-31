@@ -2,7 +2,17 @@
   "name": "pix-payment-platform",
   "private": true,
   "type": "module",
+  "scripts": {
+    "typecheck": "npm --workspace @pix/core run typecheck && npm --workspace @pix/server run typecheck && npm --workspace @pix/web run typecheck",
+    "build": "npm --workspace @pix/web run build",
+    "test": "vitest run",
+    "audit:prod": "npm audit --omit=dev"
+  },
   "workspaces": [
     "packages/*"
-  ]
+  ],
+  "devDependencies": {
+    "jsdom": "^29.1.1",
+    "vitest": "^4.1.7"
+  }
 }

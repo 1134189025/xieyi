@@ -4,7 +4,7 @@ import { batchCreateCodes, listCodes, deleteCode } from '../services/redemption-
 import { createWorker, listWorkers, updateWorker, deleteWorker } from '../services/worker.service.ts';
 import { getAdminOrders, cancelOrder } from '../services/order.service.ts';
 import { getDashboardStats } from '../services/dashboard.service.ts';
-import { batchCodesSchema, createWorkerSchema, updateWorkerSchema, updateOrderSchema } from '../utils/validators.ts';
+import { batchCodesSchema, createWorkerSchema, updateWorkerSchema, updateOrderSchema, listOrdersQuerySchema } from '../utils/validators.ts';
 import { AppError } from '../middleware/error-handler.ts';
 
 const router = Router();
@@ -92,10 +92,9 @@ router.delete('/workers/:id', async (req, res, next) => {
 // Orders
 router.get('/orders', async (req, res, next) => {
   try {
-    const page = Math.max(1, Number(req.query.page) || 1);
-    const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
-    const status = req.query.status as string | undefined;
-    const result = await getAdminOrders({ status, page, limit });
+    const parsed = listOrdersQuerySchema.safeParse(req.query);
+    if (!parsed.success) throw new AppError(400, 'Invalid input');
+    const result = await getAdminOrders(parsed.data);
     res.json(result);
   } catch (error) {
     next(error);

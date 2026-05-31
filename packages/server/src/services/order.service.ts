@@ -6,27 +6,42 @@ import { resolveAccessToken, createCheckoutUrl } from './chatgpt-session.service
 import { generatePixPayment } from './pix-payment.service.ts';
 import { broadcastOrderNew, broadcastOrderStatusChange } from '../ws/index.ts';
 
+const SAFE_PAYMENT_ERROR_MESSAGE = '支付创建失败，请稍后重试';
+
 export async function createOrder(redemptionCode: string, session: string) {
-  const code = await prisma.redemptionCode.findUnique({
-    where: { code: redemptionCode },
-  });
-
-  if (!code) {
-    throw new AppError(400, 'Invalid redemption code', 'INVALID_CODE');
-  }
-  if (code.usedAt) {
-    throw new AppError(400, 'Redemption code already used', 'CODE_USED');
-  }
-
   const trackingToken = nanoid(12);
   const encryptedSession = encrypt(session);
 
-  let order = await prisma.order.create({
-    data: {
-      trackingToken,
-      redemptionCodeId: code.id,
-      encryptedSessionData: encryptedSession,
-    },
+  let order = await prisma.$transaction(async (tx) => {
+    const reserved = await tx.redemptionCode.updateMany({
+      where: { code: redemptionCode, usedAt: null },
+      data: { usedAt: new Date() },
+    });
+
+    if (reserved.count === 0) {
+      const existingCode = await tx.redemptionCode.findUnique({
+        where: { code: redemptionCode },
+        select: { id: true },
+      });
+      throw existingCode
+        ? new AppError(400, 'Redemption code already used', 'CODE_USED')
+        : new AppError(400, 'Invalid redemption code', 'INVALID_CODE');
+    }
+
+    const code = await tx.redemptionCode.findUnique({
+      where: { code: redemptionCode },
+      select: { id: true },
+    });
+    if (!code) throw new AppError(400, 'Invalid redemption code', 'INVALID_CODE');
+
+    return tx.order.create({
+      data: {
+        trackingToken,
+        status: 'CREATING_PAYMENT',
+        redemptionCodeId: code.id,
+        encryptedSessionData: encryptedSession,
+      },
+    });
   });
 
   try {
@@ -54,11 +69,6 @@ export async function createOrder(redemptionCode: string, session: string) {
       },
     });
 
-    await prisma.redemptionCode.update({
-      where: { id: code.id },
-      data: { usedAt: new Date() },
-    });
-
     broadcastOrderNew(order);
 
     return {
@@ -70,22 +80,17 @@ export async function createOrder(redemptionCode: string, session: string) {
       pixImageUrl: order.pixImageUrl,
     };
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error('Payment creation failed:', error);
     await prisma.order.update({
       where: { id: order.id },
       data: {
         status: 'FAILED',
-        errorMessage,
+        errorMessage: SAFE_PAYMENT_ERROR_MESSAGE,
         encryptedSessionData: null,
       },
     });
 
-    await prisma.redemptionCode.update({
-      where: { id: code.id },
-      data: { usedAt: new Date() },
-    });
-
-    throw new AppError(502, `Payment creation failed: ${errorMessage}`, 'PAYMENT_FAILED');
+    throw new AppError(502, SAFE_PAYMENT_ERROR_MESSAGE, 'PAYMENT_FAILED');
   }
 }
 
@@ -104,7 +109,7 @@ export async function getOrderByTrackingToken(trackingToken: string) {
     pixImageUrl: order.pixImageUrl,
     completedAt: order.completedAt?.toISOString() ?? null,
     createdAt: order.createdAt.toISOString(),
-    errorMessage: order.status === 'FAILED' ? order.errorMessage : null,
+    errorMessage: order.status === 'FAILED' ? SAFE_PAYMENT_ERROR_MESSAGE : null,
   };
 }
 
@@ -137,22 +142,24 @@ export async function getWorkerOrders(page: number, limit: number) {
 }
 
 export async function completeOrder(orderId: string, workerId: string) {
-  const order = await prisma.order.findUnique({ where: { id: orderId } });
-  if (!order) {
-    throw new AppError(404, 'Order not found');
-  }
-  if (order.status !== 'PENDING_PAYMENT') {
-    throw new AppError(409, `Order is ${order.status}, cannot complete`);
-  }
-
-  const updated = await prisma.order.update({
-    where: { id: orderId },
+  const completedAt = new Date();
+  const changed = await prisma.order.updateMany({
+    where: { id: orderId, status: 'PENDING_PAYMENT' },
     data: {
       status: 'PAYMENT_COMPLETED',
       completedById: workerId,
-      completedAt: new Date(),
+      completedAt,
     },
   });
+
+  if (changed.count === 0) {
+    const order = await prisma.order.findUnique({ where: { id: orderId } });
+    if (!order) throw new AppError(404, 'Order not found');
+    throw new AppError(409, `Order is ${order.status}, cannot complete`);
+  }
+
+  const updated = await prisma.order.findUnique({ where: { id: orderId } });
+  if (!updated) throw new AppError(404, 'Order not found');
 
   broadcastOrderStatusChange(updated);
   return { id: updated.id, status: updated.status, completedAt: updated.completedAt?.toISOString() };
@@ -200,16 +207,22 @@ export async function getAdminOrders(filters: {
 }
 
 export async function cancelOrder(orderId: string) {
-  const order = await prisma.order.findUnique({ where: { id: orderId } });
-  if (!order) throw new AppError(404, 'Order not found');
-  if (order.status === 'PAYMENT_COMPLETED') {
-    throw new AppError(409, 'Cannot cancel a completed order');
-  }
-
-  const updated = await prisma.order.update({
-    where: { id: orderId },
+  const changed = await prisma.order.updateMany({
+    where: {
+      id: orderId,
+      status: { in: ['CREATING_PAYMENT', 'PENDING_PAYMENT', 'FAILED', 'EXPIRED'] },
+    },
     data: { status: 'CANCELLED' },
   });
+
+  if (changed.count === 0) {
+    const order = await prisma.order.findUnique({ where: { id: orderId } });
+    if (!order) throw new AppError(404, 'Order not found');
+    throw new AppError(409, `Order is ${order.status}, cannot cancel`);
+  }
+
+  const updated = await prisma.order.findUnique({ where: { id: orderId } });
+  if (!updated) throw new AppError(404, 'Order not found');
 
   broadcastOrderStatusChange(updated);
   return { id: updated.id, status: updated.status };

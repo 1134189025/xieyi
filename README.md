@@ -1,4 +1,4 @@
-# Pix Payment Platform
+# Pix 协议支付平台
 
 巴西 Pix 协议支付 Web 平台，支持三种角色：管理员、工人、客户。
 
@@ -78,14 +78,14 @@ cp packages/server/.env.example packages/server/.env
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/pix_payment
 
 # JWT 密钥（务必改成随机字符串）
-JWT_SECRET=your-random-secret-key-at-least-32-chars
+JWT_SECRET=REPLACE_WITH_RANDOM_32_PLUS_CHAR_SECRET
 
 # Session 加密密钥（64位 hex 字符串）
-SESSION_ENCRYPTION_KEY=your-64-char-hex-string-here-1234567890abcdef1234567890abcdef
+SESSION_ENCRYPTION_KEY=REPLACE_WITH_64_HEX_CHAR_KEY
 
 # 管理员初始账号（首次启动自动创建）
 ADMIN_USERNAME=admin
-ADMIN_PASSWORD=your-secure-password
+ADMIN_PASSWORD=REPLACE_WITH_STRONG_ADMIN_PASSWORD
 
 # 服务端口
 PORT=3000
@@ -94,7 +94,7 @@ PORT=3000
 CORS_ORIGIN=http://localhost:5173
 ```
 
-> 生成随机密钥：`node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
+> 生成随机密钥：`node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`。`SESSION_ENCRYPTION_KEY` 必须是 64 位 hex；`JWT_SECRET` 和 `ADMIN_PASSWORD` 必须替换为非占位、非默认的强随机值，否则服务端会拒绝启动。
 
 ### 5. 初始化数据库
 

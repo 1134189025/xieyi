@@ -8,12 +8,13 @@ export interface PixPaymentResult {
   qrPngBuffer: Buffer;
 }
 
-export async function generatePixPayment(checkoutUrl: string): Promise<PixPaymentResult> {
+export async function generatePixPayment(checkoutUrl: string, timeoutMs = 30_000): Promise<PixPaymentResult> {
   const profile = generateBrazilBillingProfile();
 
   const stripeResult = await createDirectStripePixPayment({
     checkoutUrl,
     profile,
+    timeoutMs,
   });
 
   const qrPngBuffer = await QRCode.toBuffer(stripeResult.pix.data, {

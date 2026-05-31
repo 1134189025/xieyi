@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, type ReactNode } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react';
 import api from '../api/client';
 
 interface User {
@@ -15,6 +15,7 @@ interface AuthContextType {
   logout: () => void;
   isAdmin: boolean;
   isWorker: boolean;
+  authStatus: 'checking' | 'authenticated' | 'anonymous';
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -25,6 +26,43 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return saved ? JSON.parse(saved) : null;
   });
   const [token, setToken] = useState<string | null>(() => localStorage.getItem('token'));
+  const [authStatus, setAuthStatus] = useState<AuthContextType['authStatus']>(() =>
+    localStorage.getItem('token') ? 'checking' : 'anonymous',
+  );
+
+  const clearAuth = useCallback(() => {
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    setToken(null);
+    setUser(null);
+    setAuthStatus('anonymous');
+  }, []);
+
+  useEffect(() => {
+    if (!token) {
+      setAuthStatus('anonymous');
+      return;
+    }
+
+    let cancelled = false;
+    setAuthStatus('checking');
+    api
+      .get('/auth/me')
+      .then((res) => {
+        if (cancelled) return;
+        const currentUser = res.data.user as User;
+        localStorage.setItem('user', JSON.stringify(currentUser));
+        setUser(currentUser);
+        setAuthStatus('authenticated');
+      })
+      .catch(() => {
+        if (!cancelled) clearAuth();
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [clearAuth, token]);
 
   const login = useCallback(async (username: string, password: string) => {
     const res = await api.post('/auth/login', { username, password });
@@ -33,14 +71,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.setItem('user', JSON.stringify(newUser));
     setToken(newToken);
     setUser(newUser);
+    setAuthStatus('authenticated');
   }, []);
 
-  const logout = useCallback(() => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
-    setToken(null);
-    setUser(null);
-  }, []);
+  const logout = useCallback(() => clearAuth(), [clearAuth]);
 
   return (
     <AuthContext.Provider
@@ -51,6 +85,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         logout,
         isAdmin: user?.role === 'ADMIN',
         isWorker: user?.role === 'WORKER',
+        authStatus,
       }}
     >
       {children}

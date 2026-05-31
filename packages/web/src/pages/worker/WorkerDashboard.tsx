@@ -23,14 +23,14 @@ export default function WorkerDashboard() {
   const [loading, setLoading] = useState(true);
   const [completing, setCompleting] = useState<string | null>(null);
   const { token } = useAuth();
-  const socketRef = useSocket('/worker', token);
+  const socket = useSocket('/worker', token);
 
   const fetchOrders = async () => {
     try {
       const res = await api.get('/worker/orders?limit=50');
       setOrders(res.data.orders);
     } catch {
-      toast.error('Failed to load orders');
+      toast.error('订单加载失败');
     } finally {
       setLoading(false);
     }
@@ -41,12 +41,11 @@ export default function WorkerDashboard() {
   }, []);
 
   useEffect(() => {
-    const socket = socketRef.current;
     if (!socket) return;
 
     const handleNew = (order: OrderItem) => {
       setOrders((prev) => [...prev, order]);
-      toast.success('New order received!');
+      toast.success('收到新订单');
     };
 
     const handleCompleted = (data: { id: string }) => {
@@ -60,17 +59,17 @@ export default function WorkerDashboard() {
       socket.off('order:new', handleNew);
       socket.off('order:completed', handleCompleted);
     };
-  }, [socketRef]);
+  }, [socket]);
 
   const handleComplete = async (orderId: string) => {
-    if (!confirm('Confirm this payment has been completed?')) return;
+    if (!confirm('确认这笔 Pix 已完成付款？')) return;
     setCompleting(orderId);
     try {
       await api.post(`/worker/orders/${orderId}/complete`);
       setOrders((prev) => prev.filter((o) => o.id !== orderId));
-      toast.success('Order marked as completed!');
+      toast.success('订单已标记完成');
     } catch {
-      toast.error('Failed to complete order');
+      toast.error('标记完成失败');
     } finally {
       setCompleting(null);
     }
@@ -79,8 +78,8 @@ export default function WorkerDashboard() {
   return (
     <Layout>
       <div className="mb-6">
-        <h2 className="text-2xl font-bold text-gray-900">Pending Orders</h2>
-        <p className="text-gray-500 mt-1">{orders.length} orders waiting for payment</p>
+        <h2 className="text-2xl font-bold text-gray-900">待处理订单</h2>
+        <p className="text-gray-500 mt-1">{orders.length} 个订单等待付款</p>
       </div>
 
       {loading ? (
@@ -90,7 +89,7 @@ export default function WorkerDashboard() {
       ) : orders.length === 0 ? (
         <div className="text-center py-20">
           <QrCode className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-          <p className="text-lg text-gray-500">No pending orders</p>
+          <p className="text-lg text-gray-500">暂无待处理订单</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
@@ -104,7 +103,7 @@ export default function WorkerDashboard() {
                   </p>
                 </div>
                 <span className="px-2 py-0.5 text-xs bg-yellow-100 text-yellow-700 rounded-full">
-                  Pending
+                  待支付
                 </span>
               </div>
 
@@ -125,7 +124,7 @@ export default function WorkerDashboard() {
                 ) : (
                   <CheckCircle size={16} />
                 )}
-                Mark as Completed
+                标记为已完成
               </button>
             </div>
           ))}

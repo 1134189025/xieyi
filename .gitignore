@@ -3,9 +3,6 @@ dist/
 .env
 *.env.local
 
-# Prisma
-packages/server/prisma/migrations/
-
 # Build outputs
 packages/web/dist/
 

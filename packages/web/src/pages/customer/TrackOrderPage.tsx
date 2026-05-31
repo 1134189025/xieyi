@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import api from '../../api/client';
+import { publicApi } from '../../api/client';
 import { useOrderTracking } from '../../hooks/useSocket';
 import QrCodeDisplay from '../../components/QrCodeDisplay';
 import StatusBadge from '../../components/StatusBadge';
 import { CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
+import { safeErrorMessage } from '../../utils/labels';
 
 interface OrderData {
   trackingToken: string;
@@ -24,20 +25,24 @@ export default function TrackOrderPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  useEffect(() => {
+  const fetchOrder = useCallback(async () => {
     if (!trackingToken) return;
-    api
-      .get(`/orders/track/${trackingToken}`)
-      .then((res) => setOrder(res.data))
-      .catch((err) => setError(err.response?.data?.error ?? 'Failed to load order'))
-      .finally(() => setLoading(false));
+    try {
+      const res = await publicApi.get(`/orders/track/${trackingToken}`);
+      setOrder(res.data);
+      setError('');
+    } catch (err) {
+      setError(safeErrorMessage(err, '订单加载失败'));
+    } finally {
+      setLoading(false);
+    }
   }, [trackingToken]);
 
-  const handleStatusChange = useCallback((data: { status: string; completedAt: string | null }) => {
-    setOrder((prev) => (prev ? { ...prev, status: data.status, completedAt: data.completedAt } : prev));
-  }, []);
+  useEffect(() => {
+    fetchOrder();
+  }, [fetchOrder]);
 
-  useOrderTracking(trackingToken, handleStatusChange);
+  useOrderTracking(trackingToken, fetchOrder);
 
   if (loading) {
     return (
@@ -52,9 +57,9 @@ export default function TrackOrderPage() {
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center">
           <AlertCircle className="w-16 h-16 text-red-400 mx-auto mb-4" />
-          <p className="text-lg text-gray-600">{error || 'Order not found'}</p>
+          <p className="text-lg text-gray-600">{error || '未找到订单'}</p>
           <Link to="/" className="mt-4 inline-block text-indigo-600 hover:underline">
-            Back to home
+            返回首页
           </Link>
         </div>
       </div>
@@ -64,12 +69,14 @@ export default function TrackOrderPage() {
   const isCompleted = order.status === 'PAYMENT_COMPLETED';
   const isFailed = order.status === 'FAILED';
   const isPending = order.status === 'PENDING_PAYMENT';
+  const isCreating = order.status === 'CREATING_PAYMENT';
+  const isClosed = order.status === 'EXPIRED' || order.status === 'CANCELLED';
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-indigo-50 to-blue-100 flex items-center justify-center p-4">
       <div className="w-full max-w-lg bg-white rounded-2xl shadow-xl overflow-hidden">
         <div className="bg-gradient-to-r from-indigo-600 to-blue-600 px-8 py-6 text-center">
-          <h1 className="text-xl font-bold text-white">Order Status</h1>
+          <h1 className="text-xl font-bold text-white">订单状态</h1>
           <p className="text-indigo-200 text-sm mt-1 font-mono">{order.trackingToken}</p>
         </div>
 
@@ -77,17 +84,17 @@ export default function TrackOrderPage() {
           <div className="text-center mb-6">
             <StatusBadge status={order.status} />
             <p className="text-sm text-gray-500 mt-2">
-              Created: {new Date(order.createdAt).toLocaleString('zh-CN')}
+              创建时间：{new Date(order.createdAt).toLocaleString('zh-CN')}
             </p>
           </div>
 
           {isCompleted && (
             <div className="flex flex-col items-center gap-4 py-8">
               <CheckCircle className="w-20 h-20 text-green-500" />
-              <h2 className="text-xl font-bold text-green-700">Payment Completed!</h2>
+              <h2 className="text-xl font-bold text-green-700">支付已完成</h2>
               {order.completedAt && (
                 <p className="text-sm text-gray-500">
-                  Completed at: {new Date(order.completedAt).toLocaleString('zh-CN')}
+                  完成时间：{new Date(order.completedAt).toLocaleString('zh-CN')}
                 </p>
               )}
             </div>
@@ -96,10 +103,17 @@ export default function TrackOrderPage() {
           {isFailed && (
             <div className="flex flex-col items-center gap-4 py-8">
               <AlertCircle className="w-20 h-20 text-red-400" />
-              <h2 className="text-lg font-bold text-red-700">Order Failed</h2>
+              <h2 className="text-lg font-bold text-red-700">订单失败</h2>
               {order.errorMessage && (
                 <p className="text-sm text-gray-500 text-center max-w-sm">{order.errorMessage}</p>
               )}
+            </div>
+          )}
+
+          {isCreating && (
+            <div className="flex flex-col items-center gap-4 py-8">
+              <Loader2 className="w-12 h-12 animate-spin text-indigo-600" />
+              <p className="text-sm text-gray-600">正在生成 Pix 二维码，请稍候...</p>
             </div>
           )}
 
@@ -107,7 +121,7 @@ export default function TrackOrderPage() {
             <div>
               <div className="flex items-center justify-center gap-2 mb-6">
                 <div className="w-3 h-3 bg-yellow-400 rounded-full animate-pulse" />
-                <span className="text-sm text-gray-600">Waiting for payment...</span>
+                <span className="text-sm text-gray-600">等待工人扫码付款...</span>
               </div>
               <QrCodeDisplay
                 pixCode={order.pixCode}
@@ -117,11 +131,18 @@ export default function TrackOrderPage() {
               />
             </div>
           )}
+
+          {isClosed && (
+            <div className="flex flex-col items-center gap-4 py-8">
+              <AlertCircle className="w-16 h-16 text-gray-400" />
+              <p className="text-sm text-gray-600">订单已关闭，无法继续支付。</p>
+            </div>
+          )}
         </div>
 
         <div className="px-8 pb-6 text-center">
           <Link to="/" className="text-sm text-indigo-600 hover:underline">
-            Submit another order
+            提交新订单
           </Link>
         </div>
       </div>

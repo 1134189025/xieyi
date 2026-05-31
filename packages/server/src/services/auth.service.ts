@@ -30,6 +30,20 @@ export async function login(username: string, password: string) {
   };
 }
 
+export async function getCurrentUser(userId: string) {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user || !user.enabled) {
+    throw new AppError(401, 'Invalid or expired token');
+  }
+
+  return {
+    id: user.id,
+    username: user.username,
+    role: user.role,
+    displayName: user.displayName,
+  };
+}
+
 export async function seedAdmin() {
   const existing = await prisma.user.findFirst({ where: { role: 'ADMIN' } });
   if (existing) return;

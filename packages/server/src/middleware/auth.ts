@@ -2,6 +2,7 @@ import type { RequestHandler } from 'express';
 import jwt from 'jsonwebtoken';
 import type { UserRole } from '@prisma/client';
 import { config } from '../config.ts';
+import { prisma } from '../db.ts';
 
 export interface JwtPayload {
   sub: string;
@@ -16,7 +17,7 @@ declare global {
   }
 }
 
-export const authenticate: RequestHandler = (req, res, next) => {
+export const authenticate: RequestHandler = async (req, res, next) => {
   const header = req.headers.authorization;
   if (!header?.startsWith('Bearer ')) {
     res.status(401).json({ error: 'Authentication required' });
@@ -25,7 +26,16 @@ export const authenticate: RequestHandler = (req, res, next) => {
 
   try {
     const payload = jwt.verify(header.slice(7), config.jwtSecret) as JwtPayload;
-    req.user = payload;
+    const user = await prisma.user.findUnique({
+      where: { id: payload.sub },
+      select: { id: true, role: true, enabled: true },
+    });
+    if (!user?.enabled) {
+      res.status(401).json({ error: 'Invalid or expired token' });
+      return;
+    }
+
+    req.user = { sub: user.id, role: user.role };
     next();
   } catch {
     res.status(401).json({ error: 'Invalid or expired token' });

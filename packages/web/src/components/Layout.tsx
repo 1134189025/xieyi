@@ -10,6 +10,7 @@ import {
   QrCode,
 } from 'lucide-react';
 import clsx from 'clsx';
+import { roleLabel } from '../utils/labels';
 
 const ADMIN_NAV = [
   { to: '/admin', label: '看板', icon: LayoutDashboard },
@@ -37,10 +38,10 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     <div className="flex h-screen bg-gray-100">
       <aside className="w-64 bg-white shadow-lg flex flex-col">
         <div className="p-6 border-b">
-          <h1 className="text-xl font-bold text-indigo-600">Pix Payment</h1>
+          <h1 className="text-xl font-bold text-indigo-600">Pix 协议支付</h1>
           <p className="text-sm text-gray-500 mt-1">{user?.displayName ?? user?.username}</p>
           <span className="inline-block mt-1 px-2 py-0.5 text-xs font-medium rounded bg-indigo-100 text-indigo-700">
-            {user?.role}
+            {roleLabel(user?.role)}
           </span>
         </div>
 

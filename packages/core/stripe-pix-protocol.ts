@@ -69,6 +69,7 @@ export interface CreateStripePixPaymentInput extends StripeAttributionMetadata {
   identifiers?: StripeRuntimeIdentifiers;
   profile: BrazilBillingProfile;
   riskFields: StripeRiskFields;
+  timeoutMs?: number;
   transport?: StripeHttpTransport;
 }
 
@@ -78,6 +79,7 @@ export interface CreateDirectStripePixPaymentInput {
   identifiers?: StripeRuntimeIdentifiers;
   clientSessionId?: string;
   riskFields?: Partial<StripeRiskFields>;
+  timeoutMs?: number;
   transport?: StripeHttpTransport;
 }
 
@@ -89,7 +91,7 @@ export interface CreateStripePixPaymentResult {
 }
 
 export interface StripeHttpTransport {
-  postForm(url: string, body: URLSearchParams): Promise<unknown>;
+  postForm(url: string, body: URLSearchParams, options?: { timeoutMs?: number }): Promise<unknown>;
 }
 
 export function parseCheckoutSessionId(url: string): string {
@@ -200,7 +202,8 @@ export async function createStripePixPayment(input: CreateStripePixPaymentInput)
     identifiers,
     profile: input.profile,
   });
-  const paymentMethodResponse = await transport.postForm('https://api.stripe.com/v1/payment_methods', paymentMethodBody);
+  const requestOptions = { timeoutMs: input.timeoutMs ?? 30_000 };
+  const paymentMethodResponse = await transport.postForm('https://api.stripe.com/v1/payment_methods', paymentMethodBody, requestOptions);
   const paymentMethodId = extractPaymentMethodId(paymentMethodResponse);
 
   const confirmBody = buildConfirmRequestBody({
@@ -215,6 +218,7 @@ export async function createStripePixPayment(input: CreateStripePixPaymentInput)
   const confirmResponse = await transport.postForm(
     `https://api.stripe.com/v1/payment_pages/${checkoutSessionId}/confirm`,
     confirmBody,
+    requestOptions,
   );
 
   return {
@@ -232,10 +236,12 @@ export async function createDirectStripePixPayment(
   const identifiers = input.identifiers ?? createStripeRuntimeIdentifiers();
   const clientSessionId = input.clientSessionId ?? randomUUID();
   const transport = input.transport ?? new FetchStripeHttpTransport();
+  const requestOptions = { timeoutMs: input.timeoutMs ?? 30_000 };
 
   const paymentPageResponse = await transport.postForm(
     `https://api.stripe.com/v1/payment_pages/${checkoutSessionId}`,
     buildPaymentPageRequestBody({ profile: input.profile }),
+    requestOptions,
   );
   const checkoutConfigId = optionalString(asRecord(paymentPageResponse).config_id);
   const initChecksum = optionalString(asRecord(paymentPageResponse).init_checksum);
@@ -249,6 +255,7 @@ export async function createDirectStripePixPayment(
       identifiers,
       profile: input.profile,
     }),
+    requestOptions,
   );
   const paymentMethodId = extractPaymentMethodId(paymentMethodResponse);
 
@@ -263,6 +270,7 @@ export async function createDirectStripePixPayment(
       identifiers,
       riskFields: completeRiskFields(input.riskFields, initChecksum),
     }),
+    requestOptions,
   );
 
   return {
@@ -350,18 +358,20 @@ function randomNumericSuffix(): string {
 }
 
 class FetchStripeHttpTransport implements StripeHttpTransport {
-  async postForm(url: string, body: URLSearchParams): Promise<unknown> {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/x-www-form-urlencoded;charset=UTF-8',
-        origin: 'https://pay.openai.com',
-        referer: 'https://pay.openai.com/',
-        'user-agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36',
+  async postForm(url: string, body: URLSearchParams, options: { timeoutMs?: number } = {}): Promise<unknown> {
+    const response = await fetchWithTimeout(url, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded;charset=UTF-8',
+          origin: 'https://pay.openai.com',
+          referer: 'https://pay.openai.com/',
+          'user-agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36',
+        },
+        body,
       },
-      body,
-    });
+      options.timeoutMs ?? 30_000,
+    );
 
     const text = await response.text();
     if (!response.ok) {
@@ -369,5 +379,15 @@ class FetchStripeHttpTransport implements StripeHttpTransport {
     }
 
     return JSON.parse(text) as unknown;
+  }
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
   }
 }
