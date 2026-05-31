@@ -1,0 +1,8 @@
+{
+  "name": "pix-payment-platform",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ]
+}

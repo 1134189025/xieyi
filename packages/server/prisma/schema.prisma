@@ -1,0 +1,82 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  WORKER
+}
+
+enum OrderStatus {
+  PENDING_PAYMENT
+  PAYMENT_COMPLETED
+  FAILED
+  EXPIRED
+  CANCELLED
+}
+
+model User {
+  id           String   @id @default(uuid())
+  username     String   @unique
+  passwordHash String   @map("password_hash")
+  role         UserRole
+  displayName  String?  @map("display_name")
+  enabled      Boolean  @default(true)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  createdCodes    RedemptionCode[] @relation("CreatedBy")
+  completedOrders Order[]          @relation("CompletedBy")
+
+  @@map("users")
+}
+
+model RedemptionCode {
+  id          String    @id @default(uuid())
+  code        String    @unique
+  batchLabel  String?   @map("batch_label")
+  usedAt      DateTime? @map("used_at")
+  createdById String    @map("created_by_id")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  createdBy User   @relation("CreatedBy", fields: [createdById], references: [id])
+  order     Order?
+
+  @@index([code])
+  @@index([createdAt])
+  @@map("redemption_codes")
+}
+
+model Order {
+  id                   String      @id @default(uuid())
+  trackingToken        String      @unique @map("tracking_token")
+  status               OrderStatus @default(PENDING_PAYMENT)
+  redemptionCodeId     String      @unique @map("redemption_code_id")
+  checkoutSessionId    String?     @map("checkout_session_id")
+  checkoutUrl          String?     @map("checkout_url")
+  paymentMethodId      String?     @map("payment_method_id")
+  pixCode              String?     @map("pix_code")
+  pixQrPng             Bytes?      @map("pix_qr_png")
+  pixExpiresAt         DateTime?   @map("pix_expires_at")
+  pixImageUrl          String?     @map("pix_image_url")
+  billingProfileJson   Json?       @map("billing_profile_json")
+  encryptedSessionData String?     @map("encrypted_session_data")
+  errorMessage         String?     @map("error_message")
+  completedById        String?     @map("completed_by_id")
+  completedAt          DateTime?   @map("completed_at")
+  createdAt            DateTime    @default(now()) @map("created_at")
+  updatedAt            DateTime    @updatedAt @map("updated_at")
+
+  redemptionCode RedemptionCode @relation(fields: [redemptionCodeId], references: [id])
+  completedBy    User?          @relation("CompletedBy", fields: [completedById], references: [id])
+
+  @@index([status])
+  @@index([trackingToken])
+  @@index([createdAt])
+  @@map("orders")
+}

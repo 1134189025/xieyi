@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "../..",
+    "paths": {
+      "@pix/core": ["../core/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "../core/**/*.ts"]
+}

@@ -1,0 +1,26 @@
+node_modules/
+dist/
+.env
+*.env.local
+
+# Prisma
+packages/server/prisma/migrations/
+
+# Build outputs
+packages/web/dist/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Output directories (generated artifacts)
+output/
+output-*/
+
+# Logs
+*.log
+npm-debug.log*
