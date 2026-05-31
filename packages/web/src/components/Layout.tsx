@@ -8,6 +8,7 @@ import {
   BarChart3,
   LogOut,
   QrCode,
+  Settings,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { roleLabel } from '../utils/labels';
@@ -17,6 +18,7 @@ const ADMIN_NAV = [
   { to: '/admin/codes', label: '兑换码', icon: Ticket },
   { to: '/admin/workers', label: '工人管理', icon: Users },
   { to: '/admin/orders', label: '订单管理', icon: ClipboardList },
+  { to: '/admin/settings', label: '代理设置', icon: Settings },
 ];
 
 const WORKER_NAV = [

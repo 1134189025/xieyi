@@ -41,4 +41,17 @@ describe('safeErrorMessage', () => {
 
     expect(safeErrorMessage(error, '创建订单失败')).toBe('订单状态已变化，请重新提交或联系管理员');
   });
+
+  it('把账号无资格错误码映射成中文提示', () => {
+    const error = {
+      response: {
+        data: {
+          code: 'ACCOUNT_NOT_ELIGIBLE',
+          error: 'internal stripe detail',
+        },
+      },
+    };
+
+    expect(safeErrorMessage(error, '创建订单失败')).toBe('账号无资格，无法生成 Pix 支付');
+  });
 });

@@ -57,6 +57,27 @@ describe('chatgpt-session.service', () => {
     );
   });
 
+  it('启用代理时 ChatGPT session 请求使用代理 dispatcher', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ accessToken: ACCESS_TOKEN }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      resolveAccessToken(JSON.stringify({ sessionToken: SESSION_TOKEN }), {
+        proxyUrl: 'http://user:pass@proxy.example:10000',
+      }),
+    ).resolves.toBe(ACCESS_TOKEN);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://chatgpt.com/api/auth/session',
+      expect.objectContaining({
+        dispatcher: expect.any(Object),
+      }),
+    );
+  });
+
   it('ChatGPT session 响应缺少 accessToken 时返回稳定错误码', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
@@ -110,5 +131,40 @@ describe('chatgpt-session.service', () => {
       code: 'CHATGPT_CHECKOUT_FAILED',
       message: '无法创建 ChatGPT 结算链接，请稍后重试',
     });
+  });
+
+  it('ChatGPT checkout 瞬时 502 会按配置重试', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 502, text: async () => 'bad gateway' })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ url: 'https://pay.openai.com/c/pay/cs_test_123' }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      createCheckoutUrl(ACCESS_TOKEN, {
+        retry: { attempts: 3, backoffMs: [0, 0] },
+      }),
+    ).resolves.toBe('https://pay.openai.com/c/pay/cs_test_123');
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('ChatGPT checkout 401 业务错误不重试', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      text: async () => 'unauthorized',
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      createCheckoutUrl(ACCESS_TOKEN, {
+        retry: { attempts: 3, backoffMs: [0, 0] },
+      }),
+    ).rejects.toMatchObject({
+      code: 'CHATGPT_CHECKOUT_FAILED',
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

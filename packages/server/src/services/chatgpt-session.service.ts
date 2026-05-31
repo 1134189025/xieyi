@@ -1,3 +1,4 @@
+import { ProxyAgent } from 'undici';
 import { AppError } from '../middleware/error-handler.ts';
 
 const USER_AGENT =
@@ -20,6 +21,18 @@ const SESSION_UNRECOGNIZED_MESSAGE =
   '无法识别 ChatGPT Session，请粘贴完整 session JSON、accessToken 或 session cookie';
 const SESSION_FAILED_MESSAGE = '无法验证 ChatGPT Session，请稍后重试';
 const CHECKOUT_FAILED_MESSAGE = '无法创建 ChatGPT 结算链接，请稍后重试';
+const UPSTREAM_TIMEOUT_MESSAGE = '外部服务请求超时，请稍后重试';
+
+export interface UpstreamRetryOptions {
+  attempts: number;
+  backoffMs?: number[];
+}
+
+export interface UpstreamRequestOptions {
+  timeoutMs?: number;
+  proxyUrl?: string | null;
+  retry?: UpstreamRetryOptions;
+}
 
 export type ChatGptSessionCredential =
   | { kind: 'access_token'; accessToken: string }
@@ -54,19 +67,20 @@ export function parseChatGptSessionInput(input: string): ChatGptSessionCredentia
 
 export async function resolveAccessToken(
   session: string | ChatGptSessionCredential,
-  timeoutMs = DEFAULT_TIMEOUT_MS,
+  requestOptions: number | UpstreamRequestOptions = DEFAULT_TIMEOUT_MS,
 ): Promise<string> {
   const credential = typeof session === 'string' ? parseChatGptSessionInput(session) : session;
   if (credential.kind === 'access_token') {
     return credential.accessToken;
   }
+  const options = normalizeRequestOptions(requestOptions);
 
   const response = await fetchWithTimeout('https://chatgpt.com/api/auth/session', {
     headers: {
       cookie: `${SESSION_COOKIE_NAME}=${credential.sessionToken}`,
       'user-agent': USER_AGENT,
     },
-  }, timeoutMs);
+  }, options);
 
   if (!response.ok) {
     throw new AppError(502, SESSION_FAILED_MESSAGE, 'CHATGPT_SESSION_FAILED');
@@ -162,7 +176,11 @@ function unrecognizedSessionError(): AppError {
   return new AppError(400, SESSION_UNRECOGNIZED_MESSAGE, 'CHATGPT_SESSION_UNRECOGNIZED');
 }
 
-export async function createCheckoutUrl(accessToken: string, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<string> {
+export async function createCheckoutUrl(
+  accessToken: string,
+  requestOptions: number | UpstreamRequestOptions = DEFAULT_TIMEOUT_MS,
+): Promise<string> {
+  const options = normalizeRequestOptions(requestOptions);
   const response = await fetchWithTimeout('https://chatgpt.com/backend-api/payments/checkout', {
     method: 'POST',
     headers: {
@@ -171,7 +189,7 @@ export async function createCheckoutUrl(accessToken: string, timeoutMs = DEFAULT
       'user-agent': USER_AGENT,
     },
     body: JSON.stringify(CHECKOUT_PAYLOAD),
-  }, timeoutMs);
+  }, options);
 
   if (!response.ok) {
     throw new AppError(502, CHECKOUT_FAILED_MESSAGE, 'CHATGPT_CHECKOUT_FAILED');
@@ -186,17 +204,91 @@ export async function createCheckoutUrl(accessToken: string, timeoutMs = DEFAULT
   return url;
 }
 
-async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+type RequestInitWithDispatcher = RequestInit & { dispatcher?: unknown };
+
+function normalizeRequestOptions(options: number | UpstreamRequestOptions): Required<UpstreamRequestOptions> {
+  if (typeof options === 'number') {
+    return {
+      timeoutMs: options,
+      proxyUrl: null,
+      retry: { attempts: 1, backoffMs: [500, 1500, 3000] },
+    };
+  }
+
+  return {
+    timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    proxyUrl: options.proxyUrl ?? null,
+    retry: {
+      attempts: Math.max(1, options.retry?.attempts ?? 1),
+      backoffMs: options.retry?.backoffMs ?? [500, 1500, 3000],
+    },
+  };
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit, options: Required<UpstreamRequestOptions>): Promise<Response> {
+  const proxyAgent = options.proxyUrl ? new ProxyAgent(options.proxyUrl) : null;
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= options.retry.attempts; attempt += 1) {
+    try {
+      const response = await fetchOnce(url, init, options.timeoutMs, proxyAgent);
+      if (!response.ok && isRetryableHttpStatus(response.status) && attempt < options.retry.attempts) {
+        await response.text().catch(() => '');
+        logRetry('ChatGPT', url, attempt, options.retry.attempts, proxyAgent !== null, response.status);
+        await delay(options.retry.backoffMs?.[attempt - 1] ?? options.retry.backoffMs?.at(-1) ?? 0);
+        continue;
+      }
+      return response;
+    } catch (error) {
+      lastError = normalizeFetchError(error);
+      if (!isRetryableFetchError(lastError) || attempt >= options.retry.attempts) {
+        throw lastError;
+      }
+      logRetry('ChatGPT', url, attempt, options.retry.attempts, proxyAgent !== null);
+      await delay(options.retry.backoffMs?.[attempt - 1] ?? options.retry.backoffMs?.at(-1) ?? 0);
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new AppError(502, CHECKOUT_FAILED_MESSAGE, 'CHATGPT_CHECKOUT_FAILED');
+}
+
+async function fetchOnce(url: string, init: RequestInit, timeoutMs: number, proxyAgent: ProxyAgent | null): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
-  } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new AppError(504, '外部服务请求超时，请稍后重试', 'UPSTREAM_TIMEOUT');
-    }
-    throw error;
+    const requestInit: RequestInitWithDispatcher = { ...init, signal: controller.signal };
+    if (proxyAgent) requestInit.dispatcher = proxyAgent;
+    return await fetch(url, requestInit);
   } finally {
     clearTimeout(timer);
   }
+}
+
+function normalizeFetchError(error: unknown): unknown {
+  if (error instanceof DOMException && error.name === 'AbortError') {
+    return new AppError(504, UPSTREAM_TIMEOUT_MESSAGE, 'UPSTREAM_TIMEOUT');
+  }
+  return error;
+}
+
+function isRetryableHttpStatus(status: number): boolean {
+  return status === 408 || status === 429 || status >= 500;
+}
+
+function isRetryableFetchError(error: unknown): boolean {
+  if (error instanceof AppError) return error.code === 'UPSTREAM_TIMEOUT';
+  return error instanceof TypeError;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function logRetry(service: string, url: string, attempt: number, attempts: number, proxyEnabled: boolean, status?: number): void {
+  const host = new URL(url).hostname;
+  console.warn(
+    `${service} request retry ${attempt}/${attempts} host=${host} proxy=${proxyEnabled ? 'enabled' : 'disabled'}${
+      status ? ` status=${status}` : ''
+    }`,
+  );
 }
