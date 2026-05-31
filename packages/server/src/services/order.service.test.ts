@@ -2,9 +2,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const prisma = {
   $transaction: vi.fn(),
+  $queryRaw: vi.fn(),
+  $executeRaw: vi.fn(),
   redemptionCode: {
     findUnique: vi.fn(),
     updateMany: vi.fn(),
+    updateManyAndReturn: vi.fn(),
     update: vi.fn(),
   },
   order: {
@@ -40,13 +43,35 @@ describe('order.service', () => {
     vi.clearAllMocks();
     parseChatGptSessionInput.mockReturnValue({ kind: 'session_token', sessionToken: 'session-token-value' });
     getConfiguredProxyUrl.mockResolvedValue(null);
+    prisma.$executeRaw.mockResolvedValue(1);
+  });
+
+  it('使用单条 CTE 原子预占兑换码并创建订单，不再用 interactive transaction', async () => {
+    prisma.$queryRaw.mockResolvedValue([{
+      id: 'order-1',
+      redemptionCodeId: 'code-1',
+      trackingToken: 'track-1',
+      status: 'CREATING_PAYMENT',
+    }]);
+    resolveAccessToken.mockRejectedValue(
+      Object.assign(new Error('session failed'), {
+        statusCode: 502,
+        code: 'CHATGPT_SESSION_FAILED',
+      }),
+    );
+
+    await expect(createOrder('ABCD-1234', 'session-token-value')).rejects.toMatchObject({
+      code: 'CHATGPT_SESSION_FAILED',
+    });
+
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(prisma.redemptionCode.updateManyAndReturn).not.toHaveBeenCalled();
+    expect(prisma.order.create).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
   it('兑换码不可预占时不调用外部支付流程', async () => {
-    prisma.$transaction.mockImplementation(async (callback: (tx: typeof prisma) => Promise<unknown>) =>
-      callback(prisma),
-    );
-    prisma.redemptionCode.updateMany.mockResolvedValue({ count: 0 });
+    prisma.$queryRaw.mockResolvedValue([]);
     prisma.redemptionCode.findUnique.mockResolvedValue({ id: 'code-1' });
 
     await expect(createOrder('ABCD-1234', 'session-token-value')).rejects.toMatchObject({
@@ -54,10 +79,20 @@ describe('order.service', () => {
       code: 'CODE_USED',
     });
 
-    expect(prisma.redemptionCode.updateMany).toHaveBeenCalledWith({
-      where: { code: 'ABCD-1234', usedAt: null },
-      data: { usedAt: expect.any(Date) },
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(resolveAccessToken).not.toHaveBeenCalled();
+    expect(generatePixPayment).not.toHaveBeenCalled();
+  });
+
+  it('兑换码不存在时返回无效兑换码', async () => {
+    prisma.$queryRaw.mockResolvedValue([]);
+    prisma.redemptionCode.findUnique.mockResolvedValue(null);
+
+    await expect(createOrder('MISSING', 'session-token-value')).rejects.toMatchObject({
+      statusCode: 400,
+      code: 'INVALID_CODE',
     });
+
     expect(resolveAccessToken).not.toHaveBeenCalled();
     expect(generatePixPayment).not.toHaveBeenCalled();
   });
@@ -80,17 +115,12 @@ describe('order.service', () => {
   });
 
   it('ChatGPT Session 验证失败后删除创建中订单并释放兑换码', async () => {
-    prisma.$transaction.mockImplementation(async (callback: (tx: typeof prisma) => Promise<unknown>) =>
-      callback(prisma),
-    );
-    prisma.redemptionCode.updateMany.mockResolvedValue({ count: 1 });
-    prisma.redemptionCode.findUnique.mockResolvedValue({ id: 'code-1' });
-    prisma.order.create.mockResolvedValue({
+    prisma.$queryRaw.mockResolvedValue([{
       id: 'order-1',
       redemptionCodeId: 'code-1',
       trackingToken: 'track-1',
       status: 'CREATING_PAYMENT',
-    });
+    }]);
     prisma.order.deleteMany.mockResolvedValue({ count: 1 });
     resolveAccessToken.mockRejectedValue(
       Object.assign(new Error('session failed'), {
@@ -104,13 +134,9 @@ describe('order.service', () => {
       code: 'CHATGPT_SESSION_FAILED',
     });
 
-    expect(prisma.order.deleteMany).toHaveBeenCalledWith({
-      where: { id: 'order-1', status: 'CREATING_PAYMENT' },
-    });
-    expect(prisma.redemptionCode.update).toHaveBeenCalledWith({
-      where: { id: 'code-1' },
-      data: { usedAt: null },
-    });
+    expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+    expect(prisma.order.deleteMany).not.toHaveBeenCalled();
+    expect(prisma.redemptionCode.update).not.toHaveBeenCalled();
     expect(prisma.order.update).not.toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ status: 'FAILED' }),
@@ -119,17 +145,12 @@ describe('order.service', () => {
   });
 
   it('Stripe Pix 创建失败后释放兑换码并返回安全支付错误', async () => {
-    prisma.$transaction.mockImplementation(async (callback: (tx: typeof prisma) => Promise<unknown>) =>
-      callback(prisma),
-    );
-    prisma.redemptionCode.updateMany.mockResolvedValue({ count: 1 });
-    prisma.redemptionCode.findUnique.mockResolvedValue({ id: 'code-1' });
-    prisma.order.create.mockResolvedValue({
+    prisma.$queryRaw.mockResolvedValue([{
       id: 'order-1',
       redemptionCodeId: 'code-1',
       trackingToken: 'track-1',
       status: 'CREATING_PAYMENT',
-    });
+    }]);
     prisma.order.deleteMany.mockResolvedValue({ count: 1 });
     resolveAccessToken.mockResolvedValue('access-token-value');
     createCheckoutUrl.mockResolvedValue('https://pay.openai.com/c/pay/cs_test_123');
@@ -141,27 +162,16 @@ describe('order.service', () => {
       message: '支付创建失败，请稍后重试',
     });
 
-    expect(prisma.order.deleteMany).toHaveBeenCalledWith({
-      where: { id: 'order-1', status: 'CREATING_PAYMENT' },
-    });
-    expect(prisma.redemptionCode.update).toHaveBeenCalledWith({
-      where: { id: 'code-1' },
-      data: { usedAt: null },
-    });
+    expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
   });
 
   it('账号无资格时释放兑换码并保留稳定错误码', async () => {
-    prisma.$transaction.mockImplementation(async (callback: (tx: typeof prisma) => Promise<unknown>) =>
-      callback(prisma),
-    );
-    prisma.redemptionCode.updateMany.mockResolvedValue({ count: 1 });
-    prisma.redemptionCode.findUnique.mockResolvedValue({ id: 'code-1' });
-    prisma.order.create.mockResolvedValue({
+    prisma.$queryRaw.mockResolvedValue([{
       id: 'order-1',
       redemptionCodeId: 'code-1',
       trackingToken: 'track-1',
       status: 'CREATING_PAYMENT',
-    });
+    }]);
     prisma.order.deleteMany.mockResolvedValue({ count: 1 });
     resolveAccessToken.mockResolvedValue('access-token-value');
     createCheckoutUrl.mockResolvedValue('https://pay.openai.com/c/pay/cs_test_123');
@@ -178,27 +188,16 @@ describe('order.service', () => {
       message: '账号无资格，无法生成 Pix 支付',
     });
 
-    expect(prisma.order.deleteMany).toHaveBeenCalledWith({
-      where: { id: 'order-1', status: 'CREATING_PAYMENT' },
-    });
-    expect(prisma.redemptionCode.update).toHaveBeenCalledWith({
-      where: { id: 'code-1' },
-      data: { usedAt: null },
-    });
+    expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
   });
 
   it('创建订单时把后台代理配置传给 ChatGPT 和 Stripe 流程', async () => {
-    prisma.$transaction.mockImplementation(async (callback: (tx: typeof prisma) => Promise<unknown>) =>
-      callback(prisma),
-    );
-    prisma.redemptionCode.updateMany.mockResolvedValue({ count: 1 });
-    prisma.redemptionCode.findUnique.mockResolvedValue({ id: 'code-1' });
-    prisma.order.create.mockResolvedValue({
+    prisma.$queryRaw.mockResolvedValue([{
       id: 'order-1',
       redemptionCodeId: 'code-1',
       trackingToken: 'track-1',
       status: 'CREATING_PAYMENT',
-    });
+    }]);
     getConfiguredProxyUrl.mockResolvedValue('http://user:pass@proxy.example:10000');
     resolveAccessToken.mockResolvedValue('access-token-value');
     createCheckoutUrl.mockResolvedValue('https://pay.openai.com/c/pay/cs_test_123');
@@ -238,17 +237,12 @@ describe('order.service', () => {
   });
 
   it('支付创建成功后保留兑换码占用并广播待支付订单', async () => {
-    prisma.$transaction.mockImplementation(async (callback: (tx: typeof prisma) => Promise<unknown>) =>
-      callback(prisma),
-    );
-    prisma.redemptionCode.updateMany.mockResolvedValue({ count: 1 });
-    prisma.redemptionCode.findUnique.mockResolvedValue({ id: 'code-1' });
-    prisma.order.create.mockResolvedValue({
+    prisma.$queryRaw.mockResolvedValue([{
       id: 'order-1',
       redemptionCodeId: 'code-1',
       trackingToken: 'track-1',
       status: 'CREATING_PAYMENT',
-    });
+    }]);
     resolveAccessToken.mockResolvedValue('access-token-value');
     createCheckoutUrl.mockResolvedValue('https://pay.openai.com/c/pay/cs_test_123');
     generatePixPayment.mockResolvedValue({
@@ -280,7 +274,7 @@ describe('order.service', () => {
       pixCode: 'pix-code',
     });
 
-    expect(prisma.order.deleteMany).not.toHaveBeenCalled();
+    expect(prisma.$executeRaw).not.toHaveBeenCalled();
     expect(prisma.order.updateMany).toHaveBeenCalledWith({
       where: { id: 'order-1', status: 'CREATING_PAYMENT' },
       data: expect.objectContaining({
@@ -295,24 +289,15 @@ describe('order.service', () => {
         status: 'PENDING_PAYMENT',
       }),
     );
-    expect(prisma.redemptionCode.update).not.toHaveBeenCalledWith({
-      where: { id: 'code-1' },
-      data: { usedAt: null },
-    });
   });
 
   it('创建中订单被取消后不会被支付创建结果复活', async () => {
-    prisma.$transaction.mockImplementation(async (callback: (tx: typeof prisma) => Promise<unknown>) =>
-      callback(prisma),
-    );
-    prisma.redemptionCode.updateMany.mockResolvedValue({ count: 1 });
-    prisma.redemptionCode.findUnique.mockResolvedValue({ id: 'code-1' });
-    prisma.order.create.mockResolvedValue({
+    prisma.$queryRaw.mockResolvedValue([{
       id: 'order-1',
       redemptionCodeId: 'code-1',
       trackingToken: 'track-1',
       status: 'CREATING_PAYMENT',
-    });
+    }]);
     resolveAccessToken.mockResolvedValue('access-token-value');
     createCheckoutUrl.mockResolvedValue('https://pay.openai.com/c/pay/cs_test_123');
     generatePixPayment.mockResolvedValue({
@@ -347,28 +332,18 @@ describe('order.service', () => {
       where: { id: 'order-1', status: 'CREATING_PAYMENT' },
       data: expect.objectContaining({ status: 'PENDING_PAYMENT' }),
     });
-    expect(prisma.order.deleteMany).toHaveBeenCalledWith({
-      where: { id: 'order-1', status: 'CREATING_PAYMENT' },
-    });
-    expect(prisma.redemptionCode.update).not.toHaveBeenCalledWith({
-      where: { id: 'code-1' },
-      data: { usedAt: null },
-    });
+    expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+    expect(prisma.redemptionCode.update).not.toHaveBeenCalled();
     expect(broadcastOrderNew).not.toHaveBeenCalled();
   });
 
   it('无稳定 code 的内部错误会转为安全支付错误', async () => {
-    prisma.$transaction.mockImplementation(async (callback: (tx: typeof prisma) => Promise<unknown>) =>
-      callback(prisma),
-    );
-    prisma.redemptionCode.updateMany.mockResolvedValue({ count: 1 });
-    prisma.redemptionCode.findUnique.mockResolvedValue({ id: 'code-1' });
-    prisma.order.create.mockResolvedValue({
+    prisma.$queryRaw.mockResolvedValue([{
       id: 'order-1',
       redemptionCodeId: 'code-1',
       trackingToken: 'track-1',
       status: 'CREATING_PAYMENT',
-    });
+    }]);
     prisma.order.deleteMany.mockResolvedValue({ count: 1 });
     resolveAccessToken.mockRejectedValue(
       Object.assign(new Error('No accessToken in ChatGPT session response'), {
@@ -381,6 +356,78 @@ describe('order.service', () => {
       code: 'PAYMENT_FAILED',
       message: '支付创建失败，请稍后重试',
     });
+  });
+
+  it('订单创建 P2028 时释放本次预占并返回繁忙错误', async () => {
+    prisma.$queryRaw.mockRejectedValue(
+      Object.assign(new Error('Transaction already closed'), {
+        code: 'P2028',
+      }),
+    );
+
+    await expect(createOrder('ABCD-1234', 'session-token-value')).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'ORDER_CREATE_BUSY',
+      message: '订单创建繁忙，请稍后重试',
+    });
+
+    expect(prisma.redemptionCode.updateMany).not.toHaveBeenCalled();
+    expect(resolveAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('订单创建遇到兑换码唯一冲突时返回已使用且不释放已有占用', async () => {
+    prisma.$queryRaw.mockRejectedValue(
+      Object.assign(new Error('Unique constraint failed'), {
+        code: 'P2002',
+        meta: { target: ['redemptionCodeId'] },
+      }),
+    );
+
+    await expect(createOrder('ABCD-1234', 'session-token-value')).rejects.toMatchObject({
+      statusCode: 400,
+      code: 'CODE_USED',
+    });
+
+    expect(prisma.redemptionCode.updateMany).not.toHaveBeenCalled();
+    expect(resolveAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('raw query 包装的兑换码唯一冲突也返回已使用', async () => {
+    prisma.$queryRaw.mockRejectedValue(
+      Object.assign(new Error('Raw query failed'), {
+        code: 'P2010',
+        meta: {
+          code: '23505',
+          message: 'duplicate key value violates unique constraint "orders_redemption_code_id_key"',
+        },
+      }),
+    );
+
+    await expect(createOrder('ABCD-1234', 'session-token-value')).rejects.toMatchObject({
+      statusCode: 400,
+      code: 'CODE_USED',
+    });
+
+    expect(resolveAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('tracking token 唯一冲突不误判为兑换码已使用', async () => {
+    prisma.$queryRaw.mockRejectedValue(
+      Object.assign(new Error('Raw query failed'), {
+        code: 'P2010',
+        meta: {
+          code: '23505',
+          message: 'duplicate key value violates unique constraint "orders_tracking_token_key"',
+        },
+      }),
+    );
+
+    await expect(createOrder('ABCD-1234', 'session-token-value')).rejects.toMatchObject({
+      statusCode: 502,
+      code: 'PAYMENT_FAILED',
+    });
+
+    expect(resolveAccessToken).not.toHaveBeenCalled();
   });
 
   it('完成订单使用条件状态更新避免并发覆盖', async () => {

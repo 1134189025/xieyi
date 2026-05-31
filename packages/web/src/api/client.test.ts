@@ -54,4 +54,17 @@ describe('safeErrorMessage', () => {
 
     expect(safeErrorMessage(error, '创建订单失败')).toBe('账号无资格，无法生成 Pix 支付');
   });
+
+  it('把订单创建繁忙错误码映射成中文提示', () => {
+    const error = {
+      response: {
+        data: {
+          code: 'ORDER_CREATE_BUSY',
+          error: 'Transaction already closed',
+        },
+      },
+    };
+
+    expect(safeErrorMessage(error, '创建订单失败')).toBe('订单创建繁忙，请稍后重试');
+  });
 });
