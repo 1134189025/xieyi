@@ -1,5 +1,14 @@
 import { z } from 'zod';
 
+export const orderStatusSchema = z.enum([
+  'CREATING_PAYMENT',
+  'PENDING_PAYMENT',
+  'PAYMENT_COMPLETED',
+  'FAILED',
+  'EXPIRED',
+  'CANCELLED',
+]);
+
 export const loginSchema = z.object({
   username: z.string().min(1).max(50),
   password: z.string().min(1).max(200),
@@ -29,4 +38,10 @@ export const updateWorkerSchema = z.object({
 
 export const updateOrderSchema = z.object({
   status: z.enum(['CANCELLED']),
+});
+
+export const listOrdersQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  status: orderStatusSchema.optional(),
 });

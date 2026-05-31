@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken';
 import { config } from '../config.ts';
 import type { JwtPayload } from '../middleware/auth.ts';
 import type { Order } from '@prisma/client';
+import { prisma } from '../db.ts';
 
 let io: Server;
 
@@ -14,22 +15,25 @@ export function setupWebSocket(httpServer: HttpServer) {
 
   const ordersNs = io.of('/orders');
   ordersNs.on('connection', (socket) => {
+    let joinedRooms = 0;
     socket.on('join', (data: { trackingToken: string }) => {
-      if (data.trackingToken) {
+      if (joinedRooms >= 5) return;
+      if (/^[A-Za-z0-9_-]{8,64}$/.test(data.trackingToken)) {
+        joinedRooms += 1;
         socket.join(`order:${data.trackingToken}`);
       }
     });
   });
 
   const workerNs = io.of('/worker');
-  workerNs.use((socket, next) => {
+  workerNs.use(async (socket, next) => {
     try {
       const token = socket.handshake.auth?.token as string;
-      const payload = jwt.verify(token, config.jwtSecret) as JwtPayload;
-      if (payload.role !== 'WORKER' && payload.role !== 'ADMIN') {
+      const user = await verifySocketUser(token);
+      if (user.role !== 'WORKER' && user.role !== 'ADMIN') {
         return next(new Error('Insufficient permissions'));
       }
-      socket.data.user = payload;
+      socket.data.user = user;
       next();
     } catch {
       next(new Error('Authentication failed'));
@@ -37,14 +41,14 @@ export function setupWebSocket(httpServer: HttpServer) {
   });
 
   const adminNs = io.of('/admin');
-  adminNs.use((socket, next) => {
+  adminNs.use(async (socket, next) => {
     try {
       const token = socket.handshake.auth?.token as string;
-      const payload = jwt.verify(token, config.jwtSecret) as JwtPayload;
-      if (payload.role !== 'ADMIN') {
+      const user = await verifySocketUser(token);
+      if (user.role !== 'ADMIN') {
         return next(new Error('Insufficient permissions'));
       }
-      socket.data.user = payload;
+      socket.data.user = user;
       next();
     } catch {
       next(new Error('Authentication failed'));
@@ -85,4 +89,14 @@ export function broadcastOrderStatusChange(order: Order) {
   io.of('/orders').to(`order:${order.trackingToken}`).emit('order:status', payload);
   io.of('/worker').emit('order:completed', payload);
   io.of('/admin').emit('order:completed', payload);
+}
+
+async function verifySocketUser(token: string): Promise<JwtPayload> {
+  const payload = jwt.verify(token, config.jwtSecret) as JwtPayload;
+  const user = await prisma.user.findUnique({
+    where: { id: payload.sub },
+    select: { id: true, role: true, enabled: true },
+  });
+  if (!user?.enabled) throw new Error('Authentication failed');
+  return { sub: user.id, role: user.role };
 }

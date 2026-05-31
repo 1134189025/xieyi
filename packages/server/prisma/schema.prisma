@@ -13,6 +13,7 @@ enum UserRole {
 }
 
 enum OrderStatus {
+  CREATING_PAYMENT
   PENDING_PAYMENT
   PAYMENT_COMPLETED
   FAILED

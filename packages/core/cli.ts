@@ -21,7 +21,7 @@ interface ParsedArgs {
   options: Map<string, string>;
 }
 
-async function main(argv: string[]): Promise<void> {
+export async function main(argv: string[]): Promise<void> {
   const args = parseArgs(argv);
 
   if (args.command === 'from-har') {
@@ -217,11 +217,13 @@ class RecordingStripeHttpTransport implements StripeHttpTransport {
 
   constructor(private readonly outputDir: string) {}
 
-  async postForm(url: string, body: URLSearchParams): Promise<unknown> {
+  async postForm(url: string, body: URLSearchParams, options: { timeoutMs?: number } = {}): Promise<unknown> {
     this.sequence += 1;
     await mkdir(this.outputDir, { recursive: true });
     await writeText(path.join(this.outputDir, `${String(this.sequence).padStart(2, '0')}-request.txt`), `${url}\n${body}`);
 
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 30_000);
     const response = await fetch(url, {
       method: 'POST',
       headers: {
@@ -232,7 +234,8 @@ class RecordingStripeHttpTransport implements StripeHttpTransport {
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36',
       },
       body,
-    });
+      signal: controller.signal,
+    }).finally(() => clearTimeout(timer));
     const text = await response.text();
     await writeText(path.join(this.outputDir, `${String(this.sequence).padStart(2, '0')}-response.txt`), text);
 

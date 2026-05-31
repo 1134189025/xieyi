@@ -4,6 +4,7 @@ import Layout from '../../components/Layout';
 import StatusBadge from '../../components/StatusBadge';
 import toast from 'react-hot-toast';
 import { Loader2, XCircle } from 'lucide-react';
+import { orderStatusLabel, safeErrorMessage } from '../../utils/labels';
 
 interface OrderItem {
   id: string;
@@ -23,6 +24,7 @@ export default function OrdersPage() {
   const [page, setPage] = useState(1);
   const [statusFilter, setStatusFilter] = useState('');
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
   const fetchOrders = async () => {
     setLoading(true);
@@ -32,6 +34,9 @@ export default function OrdersPage() {
       const res = await api.get('/admin/orders', { params });
       setOrders(res.data.orders);
       setTotal(res.data.total);
+      setError('');
+    } catch {
+      setError('订单列表加载失败');
     } finally {
       setLoading(false);
     }
@@ -42,27 +47,26 @@ export default function OrdersPage() {
   }, [page, statusFilter]);
 
   const handleCancel = async (orderId: string) => {
-    if (!confirm('Cancel this order?')) return;
+    if (!confirm('确认取消这个订单？')) return;
     try {
       await api.patch(`/admin/orders/${orderId}`, { status: 'CANCELLED' });
-      toast.success('Order cancelled');
+      toast.success('订单已取消');
       fetchOrders();
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { error?: string } } }).response?.data?.error ?? 'Failed';
-      toast.error(msg);
+      toast.error(safeErrorMessage(err, '取消订单失败'));
     }
   };
 
-  const statuses = ['', 'PENDING_PAYMENT', 'PAYMENT_COMPLETED', 'FAILED', 'EXPIRED', 'CANCELLED'];
+  const statuses = ['', 'CREATING_PAYMENT', 'PENDING_PAYMENT', 'PAYMENT_COMPLETED', 'FAILED', 'EXPIRED', 'CANCELLED'];
   const totalPages = Math.ceil(total / 20);
 
   return (
     <Layout>
-      <h2 className="text-2xl font-bold text-gray-900 mb-6">Orders</h2>
+      <h2 className="text-2xl font-bold text-gray-900 mb-6">订单管理</h2>
 
       <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
         <div className="px-6 py-4 border-b flex items-center gap-4 flex-wrap">
-          <span className="text-sm text-gray-500">Status:</span>
+          <span className="text-sm text-gray-500">状态：</span>
           {statuses.map((s) => (
             <button
               key={s}
@@ -71,26 +75,28 @@ export default function OrdersPage() {
                 statusFilter === s ? 'bg-indigo-100 text-indigo-700' : 'text-gray-500 hover:bg-gray-100'
               }`}
             >
-              {s || 'All'}
+              {s ? orderStatusLabel(s) : '全部'}
             </button>
           ))}
-          <span className="ml-auto text-sm text-gray-400">{total} total</span>
+          <span className="ml-auto text-sm text-gray-400">共 {total} 条</span>
         </div>
 
         {loading ? (
           <div className="flex justify-center py-10">
             <Loader2 className="w-6 h-6 animate-spin text-indigo-600" />
           </div>
+        ) : error ? (
+          <div className="py-10 text-center text-gray-500">{error}</div>
         ) : (
           <table className="w-full text-sm">
             <thead className="bg-gray-50">
               <tr>
-                <th className="px-6 py-3 text-left font-medium text-gray-500">Tracking</th>
-                <th className="px-6 py-3 text-left font-medium text-gray-500">Status</th>
-                <th className="px-6 py-3 text-left font-medium text-gray-500">Worker</th>
-                <th className="px-6 py-3 text-left font-medium text-gray-500">Created</th>
-                <th className="px-6 py-3 text-left font-medium text-gray-500">Completed</th>
-                <th className="px-6 py-3 text-right font-medium text-gray-500">Actions</th>
+                <th className="px-6 py-3 text-left font-medium text-gray-500">追踪码</th>
+                <th className="px-6 py-3 text-left font-medium text-gray-500">状态</th>
+                <th className="px-6 py-3 text-left font-medium text-gray-500">工人</th>
+                <th className="px-6 py-3 text-left font-medium text-gray-500">创建时间</th>
+                <th className="px-6 py-3 text-left font-medium text-gray-500">完成时间</th>
+                <th className="px-6 py-3 text-right font-medium text-gray-500">操作</th>
               </tr>
             </thead>
             <tbody className="divide-y">
@@ -116,7 +122,7 @@ export default function OrdersPage() {
                       <button
                         onClick={() => handleCancel(order.id)}
                         className="p-1 text-gray-400 hover:text-red-600"
-                        title="Cancel"
+                        title="取消订单"
                       >
                         <XCircle size={16} />
                       </button>

@@ -1,23 +1,23 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useState } from 'react';
 import { io, type Socket } from 'socket.io-client';
 
 export function useSocket(namespace: string, authToken?: string | null) {
-  const socketRef = useRef<Socket | null>(null);
+  const [socket, setSocket] = useState<Socket | null>(null);
 
   useEffect(() => {
-    const socket = io(namespace, {
+    const nextSocket = io(namespace, {
       auth: authToken ? { token: authToken } : undefined,
       transports: ['websocket', 'polling'],
     });
-    socketRef.current = socket;
+    setSocket(nextSocket);
 
     return () => {
-      socket.disconnect();
-      socketRef.current = null;
+      nextSocket.disconnect();
+      setSocket(null);
     };
   }, [namespace, authToken]);
 
-  return socketRef;
+  return socket;
 }
 
 export function useOrderTracking(
@@ -28,10 +28,14 @@ export function useOrderTracking(
     if (!trackingToken) return;
 
     const socket = io('/orders', { transports: ['websocket', 'polling'] });
-    socket.emit('join', { trackingToken });
+    const joinRoom = () => socket.emit('join', { trackingToken });
+    socket.on('connect', joinRoom);
+    joinRoom();
     socket.on('order:status', onStatusChange);
 
     return () => {
+      socket.off('connect', joinRoom);
+      socket.off('order:status', onStatusChange);
       socket.disconnect();
     };
   }, [trackingToken, onStatusChange]);

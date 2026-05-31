@@ -13,7 +13,7 @@ export default function QrCodeDisplay({ pixCode, pixQrPngBase64, pixImageUrl, pi
   const [copied, setCopied] = useState(false);
 
   if (!pixCode) {
-    return <p className="text-gray-500 text-center">No Pix code available</p>;
+    return <p className="text-gray-500 text-center">暂无 Pix 付款码</p>;
   }
 
   const imageSrc = pixQrPngBase64
@@ -21,20 +21,24 @@ export default function QrCodeDisplay({ pixCode, pixQrPngBase64, pixImageUrl, pi
     : pixImageUrl ?? undefined;
 
   const handleCopy = async () => {
-    await navigator.clipboard.writeText(pixCode);
-    setCopied(true);
-    toast.success('Pix code copied!');
-    setTimeout(() => setCopied(false), 2000);
+    try {
+      await navigator.clipboard.writeText(pixCode);
+      setCopied(true);
+      toast.success('Pix 付款码已复制');
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast.error('复制失败，请手动复制');
+    }
   };
 
   return (
     <div className="flex flex-col items-center gap-4">
       {imageSrc && (
-        <img src={imageSrc} alt="Pix QR Code" className="w-64 h-64 border rounded-lg" />
+        <img src={imageSrc} alt="Pix 二维码" className="w-64 h-64 border rounded-lg" />
       )}
 
       <div className="w-full max-w-md">
-        <label className="block text-sm font-medium text-gray-700 mb-1">Pix Code</label>
+        <label className="block text-sm font-medium text-gray-700 mb-1">Pix 付款码</label>
         <div className="flex gap-2">
           <input
             type="text"
@@ -54,7 +58,7 @@ export default function QrCodeDisplay({ pixCode, pixQrPngBase64, pixImageUrl, pi
 
       {pixExpiresAt && (
         <p className="text-sm text-gray-500">
-          Expires: {new Date(pixExpiresAt).toLocaleString('zh-CN')}
+          过期时间：{new Date(pixExpiresAt).toLocaleString('zh-CN')}
         </p>
       )}
     </div>

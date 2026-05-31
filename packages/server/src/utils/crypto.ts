@@ -7,8 +7,7 @@ const TAG_LENGTH = 16;
 
 function getKey(): Buffer {
   const hex = config.sessionEncryptionKey;
-  if (hex.length < 64) return randomBytes(32);
-  return Buffer.from(hex.slice(0, 64), 'hex');
+  return Buffer.from(hex, 'hex');
 }
 
 export function encrypt(plaintext: string): string {
