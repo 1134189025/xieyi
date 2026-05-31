@@ -4,7 +4,15 @@ import { batchCreateCodes, listCodes, deleteCode } from '../services/redemption-
 import { createWorker, listWorkers, updateWorker, deleteWorker } from '../services/worker.service.ts';
 import { getAdminOrders, cancelOrder } from '../services/order.service.ts';
 import { getDashboardStats } from '../services/dashboard.service.ts';
-import { batchCodesSchema, createWorkerSchema, updateWorkerSchema, updateOrderSchema, listOrdersQuerySchema } from '../utils/validators.ts';
+import { getProxySetting, updateProxySetting } from '../services/settings.service.ts';
+import {
+  batchCodesSchema,
+  createWorkerSchema,
+  updateWorkerSchema,
+  updateOrderSchema,
+  updateProxySettingSchema,
+  listOrdersQuerySchema,
+} from '../utils/validators.ts';
 import { AppError } from '../middleware/error-handler.ts';
 
 const router = Router();
@@ -118,6 +126,26 @@ router.get('/dashboard', async (_req, res, next) => {
   try {
     const stats = await getDashboardStats();
     res.json(stats);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Settings
+router.get('/settings/proxy', async (_req, res, next) => {
+  try {
+    res.json(await getProxySetting());
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.put('/settings/proxy', async (req, res, next) => {
+  try {
+    const parsed = updateProxySettingSchema.safeParse(req.body);
+    if (!parsed.success) throw new AppError(400, 'Invalid input');
+
+    res.json(await updateProxySetting(parsed.data.proxy));
   } catch (error) {
     next(error);
   }

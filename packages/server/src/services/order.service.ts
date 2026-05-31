@@ -4,6 +4,7 @@ import { AppError } from '../middleware/error-handler.ts';
 import { encrypt } from '../utils/crypto.ts';
 import { parseChatGptSessionInput, resolveAccessToken, createCheckoutUrl } from './chatgpt-session.service.ts';
 import { generatePixPayment } from './pix-payment.service.ts';
+import { getConfiguredProxyUrl } from './settings.service.ts';
 import { broadcastOrderNew, broadcastOrderStatusChange } from '../ws/index.ts';
 
 const SAFE_PAYMENT_ERROR_MESSAGE = '支付创建失败，请稍后重试';
@@ -15,10 +16,16 @@ const SAFE_PAYMENT_ERROR_CODES = new Set([
   'UPSTREAM_TIMEOUT',
   'CHATGPT_SESSION_UNRECOGNIZED',
   'ORDER_STATE_CHANGED',
+  'ACCOUNT_NOT_ELIGIBLE',
 ]);
 
 export async function createOrder(redemptionCode: string, session: string) {
   const chatGptCredential = parseChatGptSessionInput(session);
+  const proxyUrl = await getConfiguredProxyUrl();
+  const externalRequestOptions = {
+    proxyUrl: proxyUrl ?? undefined,
+    retry: { attempts: 3 },
+  };
 
   const trackingToken = nanoid(12);
   const encryptedSession = encrypt(session);
@@ -56,9 +63,9 @@ export async function createOrder(redemptionCode: string, session: string) {
   });
 
   try {
-    const accessToken = await resolveAccessToken(chatGptCredential);
-    const checkoutUrl = await createCheckoutUrl(accessToken);
-    const { stripeResult, profile, qrPngBuffer } = await generatePixPayment(checkoutUrl);
+    const accessToken = await resolveAccessToken(chatGptCredential, externalRequestOptions);
+    const checkoutUrl = await createCheckoutUrl(accessToken, externalRequestOptions);
+    const { stripeResult, profile, qrPngBuffer } = await generatePixPayment(checkoutUrl, externalRequestOptions);
 
     const pixExpiresAt = stripeResult.pix.expiresAt
       ? new Date(stripeResult.pix.expiresAt * 1000)

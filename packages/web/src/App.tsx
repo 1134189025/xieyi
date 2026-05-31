@@ -9,6 +9,7 @@ import AdminDashboard from './pages/admin/AdminDashboard';
 import RedemptionCodesPage from './pages/admin/RedemptionCodesPage';
 import WorkerManagementPage from './pages/admin/WorkerManagementPage';
 import OrdersPage from './pages/admin/OrdersPage';
+import ProxySettingsPage from './pages/admin/ProxySettingsPage';
 
 export default function App() {
   const { user } = useAuth();
@@ -71,6 +72,14 @@ export default function App() {
         element={
           <ProtectedRoute roles={['ADMIN']}>
             <OrdersPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/admin/settings"
+        element={
+          <ProtectedRoute roles={['ADMIN']}>
+            <ProxySettingsPage />
           </ProtectedRoute>
         }
       />

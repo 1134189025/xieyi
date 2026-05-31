@@ -22,10 +22,12 @@ const resolveAccessToken = vi.fn();
 const createCheckoutUrl = vi.fn();
 const generatePixPayment = vi.fn();
 const broadcastOrderNew = vi.fn();
+const getConfiguredProxyUrl = vi.fn();
 
 vi.mock('../db.ts', () => ({ prisma }));
 vi.mock('./chatgpt-session.service.ts', () => ({ parseChatGptSessionInput, resolveAccessToken, createCheckoutUrl }));
 vi.mock('./pix-payment.service.ts', () => ({ generatePixPayment }));
+vi.mock('./settings.service.ts', () => ({ getConfiguredProxyUrl }));
 vi.mock('../ws/index.ts', () => ({
   broadcastOrderNew,
   broadcastOrderStatusChange: vi.fn(),
@@ -37,6 +39,7 @@ describe('order.service', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     parseChatGptSessionInput.mockReturnValue({ kind: 'session_token', sessionToken: 'session-token-value' });
+    getConfiguredProxyUrl.mockResolvedValue(null);
   });
 
   it('兑换码不可预占时不调用外部支付流程', async () => {
@@ -145,6 +148,93 @@ describe('order.service', () => {
       where: { id: 'code-1' },
       data: { usedAt: null },
     });
+  });
+
+  it('账号无资格时释放兑换码并保留稳定错误码', async () => {
+    prisma.$transaction.mockImplementation(async (callback: (tx: typeof prisma) => Promise<unknown>) =>
+      callback(prisma),
+    );
+    prisma.redemptionCode.updateMany.mockResolvedValue({ count: 1 });
+    prisma.redemptionCode.findUnique.mockResolvedValue({ id: 'code-1' });
+    prisma.order.create.mockResolvedValue({
+      id: 'order-1',
+      redemptionCodeId: 'code-1',
+      trackingToken: 'track-1',
+      status: 'CREATING_PAYMENT',
+    });
+    prisma.order.deleteMany.mockResolvedValue({ count: 1 });
+    resolveAccessToken.mockResolvedValue('access-token-value');
+    createCheckoutUrl.mockResolvedValue('https://pay.openai.com/c/pay/cs_test_123');
+    generatePixPayment.mockRejectedValue(
+      Object.assign(new Error('账号无资格，无法生成 Pix 支付'), {
+        statusCode: 400,
+        code: 'ACCOUNT_NOT_ELIGIBLE',
+      }),
+    );
+
+    await expect(createOrder('ABCD-1234', 'session-token-value')).rejects.toMatchObject({
+      statusCode: 400,
+      code: 'ACCOUNT_NOT_ELIGIBLE',
+      message: '账号无资格，无法生成 Pix 支付',
+    });
+
+    expect(prisma.order.deleteMany).toHaveBeenCalledWith({
+      where: { id: 'order-1', status: 'CREATING_PAYMENT' },
+    });
+    expect(prisma.redemptionCode.update).toHaveBeenCalledWith({
+      where: { id: 'code-1' },
+      data: { usedAt: null },
+    });
+  });
+
+  it('创建订单时把后台代理配置传给 ChatGPT 和 Stripe 流程', async () => {
+    prisma.$transaction.mockImplementation(async (callback: (tx: typeof prisma) => Promise<unknown>) =>
+      callback(prisma),
+    );
+    prisma.redemptionCode.updateMany.mockResolvedValue({ count: 1 });
+    prisma.redemptionCode.findUnique.mockResolvedValue({ id: 'code-1' });
+    prisma.order.create.mockResolvedValue({
+      id: 'order-1',
+      redemptionCodeId: 'code-1',
+      trackingToken: 'track-1',
+      status: 'CREATING_PAYMENT',
+    });
+    getConfiguredProxyUrl.mockResolvedValue('http://user:pass@proxy.example:10000');
+    resolveAccessToken.mockResolvedValue('access-token-value');
+    createCheckoutUrl.mockResolvedValue('https://pay.openai.com/c/pay/cs_test_123');
+    generatePixPayment.mockResolvedValue({
+      stripeResult: {
+        checkoutSessionId: 'cs_test_123',
+        paymentMethodId: 'pm_test_123',
+        pix: { data: 'pix-code' },
+      },
+      profile: { name: 'Cliente Teste' },
+      qrPngBuffer: Buffer.from('png'),
+    });
+    prisma.order.updateMany.mockResolvedValue({ count: 1 });
+    prisma.order.findUnique.mockResolvedValue({
+      id: 'order-1',
+      redemptionCodeId: 'code-1',
+      trackingToken: 'track-1',
+      status: 'PENDING_PAYMENT',
+      pixCode: 'pix-code',
+      pixImageUrl: null,
+    });
+
+    await createOrder('ABCD-1234', 'session-token-value');
+
+    expect(resolveAccessToken).toHaveBeenCalledWith(
+      { kind: 'session_token', sessionToken: 'session-token-value' },
+      expect.objectContaining({ proxyUrl: 'http://user:pass@proxy.example:10000' }),
+    );
+    expect(createCheckoutUrl).toHaveBeenCalledWith(
+      'access-token-value',
+      expect.objectContaining({ proxyUrl: 'http://user:pass@proxy.example:10000' }),
+    );
+    expect(generatePixPayment).toHaveBeenCalledWith(
+      'https://pay.openai.com/c/pay/cs_test_123',
+      expect.objectContaining({ proxyUrl: 'http://user:pass@proxy.example:10000' }),
+    );
   });
 
   it('支付创建成功后保留兑换码占用并广播待支付订单', async () => {

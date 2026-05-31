@@ -27,7 +27,7 @@ packages/
 
 ### 环境要求
 
-- Node.js >= 18
+- Node.js >= 20.18.1
 - PostgreSQL >= 14
 - npm >= 9
 
