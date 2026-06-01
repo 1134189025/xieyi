@@ -22,21 +22,24 @@ export function useSocket(namespace: string, authToken?: string | null) {
 
 export function useOrderTracking(
   trackingToken: string | undefined,
-  onStatusChange: (data: { status: string; completedAt: string | null }) => void,
+  onRefresh: () => void,
 ) {
   useEffect(() => {
     if (!trackingToken) return;
 
     const socket = io('/orders', { transports: ['websocket', 'polling'] });
-    const joinRoom = () => socket.emit('join', { trackingToken });
+    const joinRoom = () => {
+      socket.emit('join', { trackingToken });
+      onRefresh();
+    };
     socket.on('connect', joinRoom);
-    joinRoom();
-    socket.on('order:status', onStatusChange);
+    if (socket.connected) joinRoom();
+    socket.on('order:status', onRefresh);
 
     return () => {
       socket.off('connect', joinRoom);
-      socket.off('order:status', onStatusChange);
+      socket.off('order:status', onRefresh);
       socket.disconnect();
     };
-  }, [trackingToken, onStatusChange]);
+  }, [trackingToken, onRefresh]);
 }

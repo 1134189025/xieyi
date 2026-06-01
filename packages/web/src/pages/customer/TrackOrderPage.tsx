@@ -59,7 +59,7 @@ export default function TrackOrderPage() {
   }, [trackingToken]);
 
   const refreshOrderFromSocket = useCallback(() => {
-    void fetchOrder();
+    void fetchOrder({ silent: true });
   }, [fetchOrder]);
 
   useEffect(() => {
@@ -69,9 +69,10 @@ export default function TrackOrderPage() {
   useEffect(() => {
     if (order?.status !== 'PENDING_PAYMENT' && order?.status !== 'CREATING_PAYMENT') return;
 
+    const refreshIntervalMs = order.status === 'CREATING_PAYMENT' ? 5_000 : 60_000;
     const refreshTimer = window.setInterval(() => {
       void fetchOrder({ silent: true });
-    }, 60_000);
+    }, refreshIntervalMs);
 
     return () => window.clearInterval(refreshTimer);
   }, [fetchOrder, order?.status]);
