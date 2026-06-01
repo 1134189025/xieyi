@@ -10,7 +10,7 @@ import {
 } from './settings.service.ts';
 import { decrypt, encrypt } from '../utils/crypto.ts';
 import { prisma } from '../db.ts';
-import { broadcastOrderNew, broadcastOrderStatusChange } from '../ws/index.ts';
+import { broadcastOrderReady } from '../ws/index.ts';
 import { failCreatingPaymentOrder } from './order.service.ts';
 
 const SAFE_PAYMENT_ERROR_CODE = 'PAYMENT_FAILED';
@@ -93,8 +93,7 @@ export async function processPixGenerationJob(input: ProcessPixGenerationJobInpu
 
     const updatedOrder = await prisma.order.findUnique({ where: { id: input.orderId } });
     if (!updatedOrder) return;
-    broadcastOrderNew(updatedOrder);
-    broadcastOrderStatusChange(updatedOrder);
+    broadcastOrderReady(updatedOrder);
   } catch (error) {
     if (failedPoolName && shouldCountProxyFailure(error)) {
       await recordProxyFailure(failedPoolName, failedProxy?.id ?? null, error);

@@ -17,7 +17,7 @@ const selectHealthyProxy = vi.fn();
 const recordProxySuccess = vi.fn();
 const recordProxyFailure = vi.fn();
 const shouldCountProxyFailure = vi.fn();
-const broadcastOrderNew = vi.fn();
+const broadcastOrderReady = vi.fn();
 const broadcastOrderStatusChange = vi.fn();
 
 vi.mock('../db.ts', () => ({ prisma }));
@@ -34,7 +34,7 @@ vi.mock('./settings.service.ts', () => ({
   recordProxyFailure,
   shouldCountProxyFailure,
 }));
-vi.mock('../ws/index.ts', () => ({ broadcastOrderNew, broadcastOrderStatusChange }));
+vi.mock('../ws/index.ts', () => ({ broadcastOrderReady, broadcastOrderStatusChange }));
 
 const { processPixGenerationJob } = await import('./pix-generation.service.ts');
 
@@ -120,8 +120,8 @@ describe('pix-generation.service', () => {
     });
     expect(recordProxySuccess).toHaveBeenCalledWith('chatgpt', 'chatgpt-proxy-1');
     expect(recordProxySuccess).toHaveBeenCalledWith('stripe', 'stripe-proxy-1');
-    expect(broadcastOrderNew).toHaveBeenCalledWith(pendingOrder);
-    expect(broadcastOrderStatusChange).toHaveBeenCalledWith(pendingOrder);
+    expect(broadcastOrderReady).toHaveBeenCalledWith(pendingOrder);
+    expect(broadcastOrderStatusChange).not.toHaveBeenCalledWith(pendingOrder);
   });
 
   it('retries proxy failures without releasing the code until the final attempt', async () => {

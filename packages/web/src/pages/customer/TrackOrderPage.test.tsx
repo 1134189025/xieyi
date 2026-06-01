@@ -120,22 +120,25 @@ describe('TrackOrderPage', () => {
     expect(container.querySelector<HTMLInputElement>('input[readonly]')).toBeNull();
   });
 
-  it('refreshes creating payment orders every 60 seconds', async () => {
+  it('refreshes creating payment orders every 5 seconds and shows Pix when generation finishes', async () => {
     vi.useFakeTimers();
-    (publicApi.get as Mock).mockResolvedValue({ data: creatingOrder(null) });
+    (publicApi.get as Mock)
+      .mockResolvedValueOnce({ data: creatingOrder(null) })
+      .mockResolvedValueOnce({ data: pendingOrder(null) });
 
-    const { root } = renderTrackOrderPage();
+    const { container, root } = renderTrackOrderPage();
     mountedRoot = root;
     await flushAsyncWork();
 
     expect(publicApi.get).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      vi.advanceTimersByTime(60_000);
+      vi.advanceTimersByTime(5_000);
       await Promise.resolve();
     });
 
     expect(publicApi.get).toHaveBeenCalledTimes(2);
+    expect(container.querySelector<HTMLInputElement>('input[readonly]')?.value).toBe('pix-code');
   });
 
   it('refreshes order details when the tracking socket reports a status change', async () => {
