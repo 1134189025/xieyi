@@ -41,7 +41,7 @@ async function runPixPaymentDetection(): Promise<PixPaymentDetectionResult> {
       setupIntentId: { not: null },
       setupIntentClientSecret: { not: null },
     },
-    orderBy: { createdAt: 'asc' },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     take: PAYMENT_STATUS_CHECK_LIMIT,
   });
   const proxyUrl = await getConfiguredProxyUrl();

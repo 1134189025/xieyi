@@ -39,7 +39,13 @@ vi.mock('../ws/index.ts', () => ({
   broadcastOrderStatusChange: vi.fn(),
 }));
 
-const { createOrder, completeOrder, getAdminOrders, getOrderByTrackingToken } = await import('./order.service.ts');
+const {
+  createOrder,
+  completeOrder,
+  getAdminOrders,
+  getOrderByTrackingToken,
+  getWorkerOrders,
+} = await import('./order.service.ts');
 
 describe('order.service', () => {
   beforeEach(() => {
@@ -47,6 +53,8 @@ describe('order.service', () => {
     parseChatGptSessionInput.mockReturnValue({ kind: 'session_token', sessionToken: 'session-token-value' });
     getConfiguredProxyUrl.mockResolvedValue(null);
     prisma.$executeRaw.mockResolvedValue(1);
+    prisma.order.count.mockResolvedValue(0);
+    prisma.order.findMany.mockResolvedValue([]);
   });
 
   it('使用单条 CTE 原子预占兑换码并创建订单，不再用 interactive transaction', async () => {
@@ -221,6 +229,8 @@ describe('order.service', () => {
       status: 'PENDING_PAYMENT',
       pixCode: 'pix-code',
       pixImageUrl: null,
+      completedAt: null,
+      createdAt: new Date('2026-06-01T00:00:00.000Z'),
     });
 
     await createOrder('ABCD-1234', 'session-token-value');
@@ -272,6 +282,8 @@ describe('order.service', () => {
       status: 'PENDING_PAYMENT',
       pixCode: 'pix-code',
       pixImageUrl: 'https://stripe.test/pix.png',
+      completedAt: null,
+      createdAt: new Date('2026-06-01T00:00:00.000Z'),
     });
 
     const response = await createOrder('ABCD-1234', 'session-token-value');
@@ -280,6 +292,15 @@ describe('order.service', () => {
       trackingToken: 'track-1',
       status: 'PENDING_PAYMENT',
       pixCode: 'pix-code',
+      queueEstimate: {
+        ordersAhead: 0,
+        position: 1,
+        pendingTotal: 1,
+        estimatedQueueSeconds: 0,
+        secondsPerOrder: 300,
+        calculationSource: 'default',
+        calculatedAt: expect.any(String),
+      },
     });
     expect(response).not.toHaveProperty('setupIntentClientSecret');
 
@@ -294,6 +315,52 @@ describe('order.service', () => {
       }),
     });
     expect(prisma.order.findUnique).toHaveBeenCalledWith({ where: { id: 'order-1' } });
+    expect(broadcastOrderNew).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'order-1',
+        status: 'PENDING_PAYMENT',
+      }),
+    );
+  });
+
+  it('支付创建成功后队列估算失败不会把订单误报为支付失败', async () => {
+    prisma.$queryRaw.mockResolvedValue([{
+      id: 'order-1',
+      redemptionCodeId: 'code-1',
+      trackingToken: 'track-1',
+      status: 'CREATING_PAYMENT',
+    }]);
+    resolveAccessToken.mockResolvedValue('access-token-value');
+    createCheckoutUrl.mockResolvedValue('https://pay.openai.com/c/pay/cs_test_123');
+    generatePixPayment.mockResolvedValue({
+      stripeResult: {
+        checkoutSessionId: 'cs_test_123',
+        paymentMethodId: 'pm_test_123',
+        pix: { data: 'pix-code' },
+      },
+      profile: { name: 'Cliente Teste' },
+      qrPngBuffer: Buffer.from('png'),
+    });
+    prisma.order.updateMany.mockResolvedValue({ count: 1 });
+    prisma.order.findUnique.mockResolvedValue({
+      id: 'order-1',
+      redemptionCodeId: 'code-1',
+      trackingToken: 'track-1',
+      status: 'PENDING_PAYMENT',
+      pixCode: 'pix-code',
+      pixImageUrl: null,
+      completedAt: null,
+      createdAt: new Date('2026-06-01T00:00:00.000Z'),
+    });
+    prisma.order.count.mockRejectedValueOnce(new Error('queue estimate unavailable'));
+
+    await expect(createOrder('ABCD-1234', 'session-token-value')).resolves.toMatchObject({
+      trackingToken: 'track-1',
+      status: 'PENDING_PAYMENT',
+      queueEstimate: null,
+    });
+
+    expect(prisma.$executeRaw).not.toHaveBeenCalled();
     expect(broadcastOrderNew).toHaveBeenCalledWith(
       expect.objectContaining({
         id: 'order-1',
@@ -476,6 +543,133 @@ describe('order.service', () => {
       status: 'FAILED',
       errorMessage: '支付创建失败，请稍后重试',
     });
+  });
+
+  it('公开追踪接口为待支付订单返回队列估算并只统计前方待支付订单', async () => {
+    prisma.order.findUnique.mockResolvedValue({
+      id: 'order-current',
+      trackingToken: 'track-1',
+      status: 'PENDING_PAYMENT',
+      pixCode: 'pix-code',
+      pixQrPng: Buffer.from('png'),
+      pixExpiresAt: new Date('2026-06-01T01:00:00.000Z'),
+      pixImageUrl: null,
+      completedAt: null,
+      createdAt: new Date('2026-06-01T00:10:00.000Z'),
+      errorMessage: null,
+    });
+    prisma.order.count
+      .mockResolvedValueOnce(2)
+      .mockResolvedValueOnce(5);
+    prisma.order.findMany.mockResolvedValue([
+      {
+        createdAt: new Date('2026-06-01T00:00:00.000Z'),
+        completedAt: new Date('2026-06-01T00:04:00.000Z'),
+      },
+      {
+        createdAt: new Date('2026-06-01T00:01:00.000Z'),
+        completedAt: new Date('2026-06-01T00:06:00.000Z'),
+      },
+      {
+        createdAt: new Date('2026-06-01T00:02:00.000Z'),
+        completedAt: new Date('2026-06-01T00:08:00.000Z'),
+      },
+    ]);
+
+    await expect(getOrderByTrackingToken('track-1')).resolves.toMatchObject({
+      queueEstimate: {
+        ordersAhead: 2,
+        position: 3,
+        pendingTotal: 5,
+        estimatedQueueSeconds: 600,
+        secondsPerOrder: 300,
+        calculationSource: 'recent_completion_cadence',
+        calculatedAt: expect.any(String),
+      },
+    });
+
+    expect(prisma.order.count).toHaveBeenNthCalledWith(1, {
+      where: {
+        status: 'PENDING_PAYMENT',
+        OR: [
+          { createdAt: { lt: new Date('2026-06-01T00:10:00.000Z') } },
+          { createdAt: new Date('2026-06-01T00:10:00.000Z'), id: { lt: 'order-current' } },
+        ],
+      },
+    });
+    expect(prisma.order.count).toHaveBeenNthCalledWith(2, {
+      where: { status: 'PENDING_PAYMENT' },
+    });
+  });
+
+  it('公开追踪接口为非待支付订单返回空队列估算', async () => {
+    prisma.order.findUnique.mockResolvedValue({
+      id: 'order-1',
+      trackingToken: 'track-1',
+      status: 'PAYMENT_COMPLETED',
+      pixCode: null,
+      pixQrPng: null,
+      pixExpiresAt: null,
+      pixImageUrl: null,
+      completedAt: new Date('2026-06-01T00:20:00.000Z'),
+      createdAt: new Date('2026-06-01T00:00:00.000Z'),
+      errorMessage: null,
+    });
+
+    await expect(getOrderByTrackingToken('track-1')).resolves.toMatchObject({
+      queueEstimate: null,
+    });
+
+    expect(prisma.order.count).not.toHaveBeenCalled();
+  });
+
+  it('队列估算在近期完成样本不足时使用默认耗时', async () => {
+    prisma.order.findUnique.mockResolvedValue({
+      id: 'order-current',
+      trackingToken: 'track-1',
+      status: 'PENDING_PAYMENT',
+      pixCode: 'pix-code',
+      pixQrPng: null,
+      pixExpiresAt: null,
+      pixImageUrl: null,
+      completedAt: null,
+      createdAt: new Date('2026-06-01T00:10:00.000Z'),
+      errorMessage: null,
+    });
+    prisma.order.count
+      .mockResolvedValueOnce(1)
+      .mockResolvedValueOnce(2);
+    prisma.order.findMany.mockResolvedValue([
+      {
+        createdAt: new Date('2026-06-01T00:00:00.000Z'),
+        completedAt: new Date('2026-06-01T00:02:00.000Z'),
+      },
+    ]);
+
+    await expect(getOrderByTrackingToken('track-1')).resolves.toMatchObject({
+      queueEstimate: {
+        ordersAhead: 1,
+        position: 2,
+        pendingTotal: 2,
+        estimatedQueueSeconds: 300,
+        secondsPerOrder: 300,
+        calculationSource: 'default',
+      },
+    });
+  });
+
+  it('工人队列使用和客户排队估算一致的稳定排序', async () => {
+    prisma.order.findMany.mockResolvedValue([]);
+    prisma.order.count.mockResolvedValue(0);
+
+    await getWorkerOrders(1, 20);
+
+    expect(prisma.order.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { status: 'PENDING_PAYMENT' },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      }),
+    );
   });
 
   it('后台订单列表把自动完成订单显示为自动检测', async () => {

@@ -17,6 +17,21 @@ interface OrderData {
   completedAt: string | null;
   createdAt: string;
   errorMessage: string | null;
+  queueEstimate: QueueEstimate | null;
+}
+
+interface QueueEstimate {
+  ordersAhead: number;
+  position: number;
+  pendingTotal: number;
+  estimatedQueueSeconds: number;
+  secondsPerOrder: number;
+  calculationSource: 'recent_completion_cadence' | 'default';
+  calculatedAt: string;
+}
+
+interface FetchOrderOptions {
+  silent?: boolean;
 }
 
 export default function TrackOrderPage() {
@@ -25,24 +40,42 @@ export default function TrackOrderPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  const fetchOrder = useCallback(async () => {
+  const fetchOrder = useCallback(async (options: FetchOrderOptions = {}) => {
     if (!trackingToken) return;
     try {
       const res = await publicApi.get(`/orders/track/${trackingToken}`);
       setOrder(res.data);
       setError('');
     } catch (err) {
-      setError(safeErrorMessage(err, '订单加载失败'));
+      if (!options.silent) {
+        setError(safeErrorMessage(err, '订单加载失败'));
+      }
     } finally {
-      setLoading(false);
+      if (!options.silent) {
+        setLoading(false);
+      }
     }
   }, [trackingToken]);
+
+  const refreshOrderFromSocket = useCallback(() => {
+    void fetchOrder();
+  }, [fetchOrder]);
 
   useEffect(() => {
     fetchOrder();
   }, [fetchOrder]);
 
-  useOrderTracking(trackingToken, fetchOrder);
+  useEffect(() => {
+    if (order?.status !== 'PENDING_PAYMENT') return;
+
+    const refreshTimer = window.setInterval(() => {
+      void fetchOrder({ silent: true });
+    }, 60_000);
+
+    return () => window.clearInterval(refreshTimer);
+  }, [fetchOrder, order?.status]);
+
+  useOrderTracking(trackingToken, refreshOrderFromSocket);
 
   if (loading) {
     return (
@@ -131,6 +164,7 @@ export default function TrackOrderPage() {
           {isPending && (
             <div className="view-section">
               <p className="checkout-lead">请让工人扫描二维码，或复制 Pix 付款码完成付款确认。</p>
+              {order.queueEstimate && <QueueEstimateCard queueEstimate={order.queueEstimate} />}
               <QrCodeDisplay
                 pixCode={order.pixCode}
                 pixQrPngBase64={order.pixQrPngBase64}
@@ -155,6 +189,22 @@ export default function TrackOrderPage() {
             </div>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function QueueEstimateCard({ queueEstimate }: { queueEstimate: QueueEstimate }) {
+  const estimatedMinutes = Math.max(1, Math.ceil(queueEstimate.estimatedQueueSeconds / 60));
+  const estimateText = queueEstimate.ordersAhead === 0
+    ? '前方无排队订单，预计很快处理'
+    : `前方 ${queueEstimate.ordersAhead} 单 · 排队第 ${queueEstimate.position} 位 · 预计约 ${estimatedMinutes} 分钟`;
+
+  return (
+    <div className="mb-5 rounded-2xl border border-app-border bg-[#fbfcfd] p-4 shadow-sm">
+      <div className="text-sm font-bold text-app-primary">{estimateText}</div>
+      <div className="mt-2 text-xs text-app-secondary">
+        当前待处理 {queueEstimate.pendingTotal} 单，估算时间会随队列变化自动刷新。
       </div>
     </div>
   );
