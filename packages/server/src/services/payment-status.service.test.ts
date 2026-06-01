@@ -87,6 +87,21 @@ describe('payment-status.service', () => {
     expect(broadcastOrderStatusChange).toHaveBeenCalledWith(completedOrder);
   });
 
+  it('自动检测按客户队列一致的稳定顺序扫描待支付订单', async () => {
+    await detectCompletedPixPayments();
+
+    expect(prisma.order.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          status: 'PENDING_PAYMENT',
+          setupIntentId: { not: null },
+          setupIntentClientSecret: { not: null },
+        },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      }),
+    );
+  });
+
   it('订单已取消或过期时不会被自动检测复活', async () => {
     prisma.order.findMany.mockResolvedValue([{
       id: 'order-1',

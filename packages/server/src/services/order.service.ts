@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { nanoid } from 'nanoid';
+import type { Order } from '@prisma/client';
 import { prisma } from '../db.ts';
 import { AppError } from '../middleware/error-handler.ts';
 import { encrypt } from '../utils/crypto.ts';
@@ -11,6 +12,12 @@ import { broadcastOrderNew, broadcastOrderStatusChange } from '../ws/index.ts';
 const SAFE_PAYMENT_ERROR_MESSAGE = '支付创建失败，请稍后重试';
 const ORDER_STATE_CHANGED_MESSAGE = '订单状态已变化，请重新提交或联系管理员';
 const ORDER_CREATE_BUSY_MESSAGE = '订单创建繁忙，请稍后重试';
+const DEFAULT_QUEUE_SECONDS_PER_ORDER = 5 * 60;
+const MIN_QUEUE_SECONDS_PER_ORDER = 60;
+const MAX_QUEUE_SECONDS_PER_ORDER = 30 * 60;
+const RECENT_COMPLETION_LOOKBACK_MS = 24 * 60 * 60 * 1000;
+const RECENT_COMPLETION_SAMPLE_LIMIT = 20;
+const MIN_RECENT_COMPLETION_SAMPLES = 3;
 const SAFE_PAYMENT_ERROR_CODES = new Set([
   'PAYMENT_FAILED',
   'CHATGPT_SESSION_FAILED',
@@ -29,6 +36,18 @@ interface CreatingPaymentOrder {
   redemptionCodeId: string;
   pixCode: string | null;
   pixImageUrl: string | null;
+}
+
+type QueueCalculationSource = 'recent_completion_cadence' | 'default';
+
+interface QueueEstimate {
+  ordersAhead: number;
+  position: number;
+  pendingTotal: number;
+  estimatedQueueSeconds: number;
+  secondsPerOrder: number;
+  calculationSource: QueueCalculationSource;
+  calculatedAt: string;
 }
 
 export async function createOrder(redemptionCode: string, session: string) {
@@ -96,6 +115,7 @@ export async function createOrder(redemptionCode: string, session: string) {
       pixQrPngBase64: qrPngBuffer.toString('base64'),
       pixExpiresAt: pixExpiresAt?.toISOString() ?? null,
       pixImageUrl: updatedOrder.pixImageUrl,
+      queueEstimate: await safeCalculateQueueEstimate(updatedOrder),
     };
   } catch (error) {
     console.error('Payment creation failed:', error);
@@ -255,6 +275,10 @@ export async function getOrderByTrackingToken(trackingToken: string) {
     throw new AppError(404, 'Order not found');
   }
 
+  return buildPublicOrderView(order);
+}
+
+async function buildPublicOrderView(order: Order) {
   return {
     trackingToken: order.trackingToken,
     status: order.status,
@@ -265,6 +289,7 @@ export async function getOrderByTrackingToken(trackingToken: string) {
     completedAt: order.completedAt?.toISOString() ?? null,
     createdAt: order.createdAt.toISOString(),
     errorMessage: order.status === 'FAILED' ? SAFE_PAYMENT_ERROR_MESSAGE : null,
+    queueEstimate: await safeCalculateQueueEstimate(order),
   };
 }
 
@@ -272,7 +297,7 @@ export async function getWorkerOrders(page: number, limit: number) {
   const [orders, total] = await Promise.all([
     prisma.order.findMany({
       where: { status: 'PENDING_PAYMENT' },
-      orderBy: { createdAt: 'asc' },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       skip: (page - 1) * limit,
       take: limit,
     }),
@@ -294,6 +319,90 @@ export async function getWorkerOrders(page: number, limit: number) {
     page,
     limit,
   };
+}
+
+async function calculateQueueEstimate(order: Order): Promise<QueueEstimate | null> {
+  if (order.status !== 'PENDING_PAYMENT') return null;
+
+  const [ordersAhead, pendingTotal, cadence] = await Promise.all([
+    prisma.order.count({
+      where: {
+        status: 'PENDING_PAYMENT',
+        OR: [
+          { createdAt: { lt: order.createdAt } },
+          { createdAt: order.createdAt, id: { lt: order.id } },
+        ],
+      },
+    }),
+    prisma.order.count({ where: { status: 'PENDING_PAYMENT' } }),
+    resolveQueueCadence(),
+  ]);
+
+  return {
+    ordersAhead,
+    position: ordersAhead + 1,
+    pendingTotal: Math.max(pendingTotal, ordersAhead + 1),
+    estimatedQueueSeconds: ordersAhead * cadence.secondsPerOrder,
+    secondsPerOrder: cadence.secondsPerOrder,
+    calculationSource: cadence.calculationSource,
+    calculatedAt: new Date().toISOString(),
+  };
+}
+
+async function safeCalculateQueueEstimate(order: Order): Promise<QueueEstimate | null> {
+  try {
+    return await calculateQueueEstimate(order);
+  } catch (error) {
+    console.warn(`Queue estimate failed order=${order.id} ${safeQueueEstimateLog(error)}`);
+    return null;
+  }
+}
+
+async function resolveQueueCadence(): Promise<{
+  secondsPerOrder: number;
+  calculationSource: QueueCalculationSource;
+}> {
+  const recentCompletedOrders = await prisma.order.findMany({
+    where: {
+      status: 'PAYMENT_COMPLETED',
+      completedAt: { gte: new Date(Date.now() - RECENT_COMPLETION_LOOKBACK_MS) },
+    },
+    orderBy: { completedAt: 'desc' },
+    take: RECENT_COMPLETION_SAMPLE_LIMIT,
+    select: { createdAt: true, completedAt: true },
+  });
+
+  const completionSeconds = recentCompletedOrders
+    .filter((order) => order.completedAt)
+    .map((order) => Math.round((order.completedAt!.getTime() - order.createdAt.getTime()) / 1000))
+    .filter((seconds) => seconds > 0);
+
+  if (completionSeconds.length < MIN_RECENT_COMPLETION_SAMPLES) {
+    return {
+      secondsPerOrder: DEFAULT_QUEUE_SECONDS_PER_ORDER,
+      calculationSource: 'default',
+    };
+  }
+
+  const averageSeconds = Math.round(
+    completionSeconds.reduce((sum, seconds) => sum + seconds, 0) / completionSeconds.length,
+  );
+
+  return {
+    secondsPerOrder: clampQueueSeconds(averageSeconds),
+    calculationSource: 'recent_completion_cadence',
+  };
+}
+
+function clampQueueSeconds(seconds: number): number {
+  return Math.min(MAX_QUEUE_SECONDS_PER_ORDER, Math.max(MIN_QUEUE_SECONDS_PER_ORDER, seconds));
+}
+
+function safeQueueEstimateLog(error: unknown): string {
+  const name = error instanceof Error ? error.name : 'UnknownError';
+  const code = (error as { code?: unknown }).code;
+  const codeText = typeof code === 'string' ? ` code=${code}` : '';
+  return `error=${name}${codeText}`;
 }
 
 export async function completeOrder(orderId: string, workerId: string) {
