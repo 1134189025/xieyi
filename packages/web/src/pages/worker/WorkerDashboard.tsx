@@ -3,7 +3,7 @@ import api from '../../api/client';
 import { useAuth } from '../../hooks/useAuth';
 import { useSocket } from '../../hooks/useSocket';
 import toast from 'react-hot-toast';
-import { CheckCircle, Copy, Loader2, QrCode } from 'lucide-react';
+import { CheckCircle, Copy, Loader2 } from 'lucide-react';
 
 type WorkerViewMode = 'qr' | 'pix';
 
@@ -15,26 +15,35 @@ interface OrderItem {
   pixQrPngBase64: string | null;
   pixExpiresAt: string | null;
   pixImageUrl: string | null;
-  claimedById: string | null;
-  claimedAt: string | null;
-  isClaimedByCurrentWorker: boolean;
   createdAt: string;
+}
+
+interface CompletionSummary {
+  completedTotal: number;
+  completedToday: number;
+  completedThisWeek: number;
 }
 
 export default function WorkerDashboard() {
   const [orders, setOrders] = useState<OrderItem[]>([]);
-  const [completedToday, setCompletedToday] = useState(0);
+  const [summary, setSummary] = useState<CompletionSummary>({
+    completedTotal: 0,
+    completedToday: 0,
+    completedThisWeek: 0,
+  });
   const [viewMode, setViewMode] = useState<WorkerViewMode>('qr');
   const [loading, setLoading] = useState(true);
-  const [claiming, setClaiming] = useState<string | null>(null);
   const [completing, setCompleting] = useState<string | null>(null);
-  const { token, user } = useAuth();
+  const { token } = useAuth();
   const socket = useSocket('/worker', token);
-  const workerId = user?.id ?? null;
 
   const fetchSummary = async () => {
     const summaryResponse = await api.get('/worker/summary');
-    setCompletedToday(Number(summaryResponse.data.completedToday) || 0);
+    setSummary({
+      completedTotal: Number(summaryResponse.data.completedTotal) || 0,
+      completedToday: Number(summaryResponse.data.completedToday) || 0,
+      completedThisWeek: Number(summaryResponse.data.completedThisWeek) || 0,
+    });
   };
 
   const fetchOrders = async () => {
@@ -57,17 +66,8 @@ export default function WorkerDashboard() {
     if (!socket) return;
 
     const handleNew = (order: OrderItem) => {
-      setOrders((previousOrders) => upsertVisibleOrder(previousOrders, order, workerId));
+      setOrders((previousOrders) => upsertVisibleOrder(previousOrders, order));
       toast.success('收到新订单');
-    };
-
-    const handleClaimed = (order: OrderItem) => {
-      setOrders((previousOrders) => {
-        if (order.claimedById === workerId) {
-          return upsertVisibleOrder(previousOrders, { ...order, isClaimedByCurrentWorker: true }, workerId);
-        }
-        return previousOrders.filter((existingOrder) => existingOrder.id !== order.id);
-      });
     };
 
     const handleCompleted = (data: { id: string }) => {
@@ -76,28 +76,13 @@ export default function WorkerDashboard() {
     };
 
     socket.on('order:new', handleNew);
-    socket.on('order:claimed', handleClaimed);
     socket.on('order:completed', handleCompleted);
 
     return () => {
       socket.off('order:new', handleNew);
-      socket.off('order:claimed', handleClaimed);
       socket.off('order:completed', handleCompleted);
     };
-  }, [socket, workerId]);
-
-  const handleClaim = async (orderId: string) => {
-    setClaiming(orderId);
-    try {
-      const claimResponse = await api.post(`/worker/orders/${orderId}/claim`);
-      setOrders((previousOrders) => upsertVisibleOrder(previousOrders, claimResponse.data, workerId));
-      toast.success('订单已领取');
-    } catch {
-      toast.error('领取订单失败');
-    } finally {
-      setClaiming(null);
-    }
-  };
+  }, [socket]);
 
   const handleComplete = async (orderId: string) => {
     if (!confirm('确认这笔 Pix 已完成付款？')) return;
@@ -119,7 +104,11 @@ export default function WorkerDashboard() {
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
         <header className="rounded-card border border-app-border bg-app-surface p-4 shadow-checkout">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="text-lg font-semibold">今日完成 {completedToday} 单</div>
+            <div className="grid gap-2 text-sm font-semibold text-app-primary sm:grid-cols-3">
+              <span>总已完成 {summary.completedTotal} 单</span>
+              <span>今日 {summary.completedToday} 单</span>
+              <span>本周 {summary.completedThisWeek} 单</span>
+            </div>
             <div className="grid grid-cols-2 gap-2 rounded-xl bg-app-muted p-1">
               <button
                 type="button"
@@ -157,10 +146,7 @@ export default function WorkerDashboard() {
                 order={order}
                 sequence={index + 1}
                 viewMode={viewMode}
-                isClaimedByCurrentWorker={isOrderClaimedByCurrentWorker(order, workerId)}
-                claiming={claiming === order.id}
                 completing={completing === order.id}
-                onClaim={() => handleClaim(order.id)}
                 onComplete={() => handleComplete(order.id)}
               />
             ))}
@@ -175,49 +161,29 @@ function OrderCard({
   order,
   sequence,
   viewMode,
-  isClaimedByCurrentWorker,
-  claiming,
   completing,
-  onClaim,
   onComplete,
 }: {
   order: OrderItem;
   sequence: number;
   viewMode: WorkerViewMode;
-  isClaimedByCurrentWorker: boolean;
-  claiming: boolean;
   completing: boolean;
-  onClaim: () => void;
   onComplete: () => void;
 }) {
   return (
     <section className="rounded-card border border-app-border bg-app-surface p-4 shadow-checkout sm:p-5">
       <div className="mb-4 text-2xl font-bold text-app-primary">#{sequence}</div>
 
-      {!isClaimedByCurrentWorker ? (
-        <button
-          type="button"
-          onClick={onClaim}
-          disabled={claiming}
-          className="flex w-full items-center justify-center gap-2 rounded-lg bg-app-accent py-3 font-medium text-white transition-colors hover:bg-app-accentHover disabled:opacity-50"
-        >
-          {claiming ? <Loader2 size={16} className="animate-spin" /> : <QrCode size={16} />}
-          领取订单
-        </button>
-      ) : (
-        <>
-          {viewMode === 'qr' ? <WorkerQrBlock order={order} /> : <WorkerPixCodeBlock pixCode={order.pixCode} />}
-          <button
-            type="button"
-            onClick={onComplete}
-            disabled={completing}
-            className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-app-accent py-3 font-medium text-white transition-colors hover:bg-app-accentHover disabled:opacity-50"
-          >
-            {completing ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle size={16} />}
-            标记为已完成
-          </button>
-        </>
-      )}
+      {viewMode === 'qr' ? <WorkerQrBlock order={order} /> : <WorkerPixCodeBlock pixCode={order.pixCode} />}
+      <button
+        type="button"
+        onClick={onComplete}
+        disabled={completing}
+        className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-app-accent py-3 font-medium text-white transition-colors hover:bg-app-accentHover disabled:opacity-50"
+      >
+        {completing ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle size={16} />}
+        标记为已完成
+      </button>
     </section>
   );
 }
@@ -278,11 +244,7 @@ function WorkerPixCodeBlock({ pixCode }: { pixCode: string | null }) {
   );
 }
 
-function upsertVisibleOrder(previousOrders: OrderItem[], order: OrderItem, workerId: string | null) {
-  if (order.claimedById && order.claimedById !== workerId) {
-    return previousOrders.filter((existingOrder) => existingOrder.id !== order.id);
-  }
-
+function upsertVisibleOrder(previousOrders: OrderItem[], order: OrderItem) {
   const nextOrders = previousOrders.filter((existingOrder) => existingOrder.id !== order.id);
   nextOrders.push(order);
   return sortWorkerOrders(nextOrders);
@@ -294,10 +256,6 @@ function sortWorkerOrders(orders: OrderItem[]) {
     if (createdAtComparison !== 0) return createdAtComparison;
     return firstOrder.id.localeCompare(secondOrder.id);
   });
-}
-
-function isOrderClaimedByCurrentWorker(order: OrderItem, workerId: string | null) {
-  return order.isClaimedByCurrentWorker || (!!workerId && order.claimedById === workerId);
 }
 
 const activeModeClass = 'rounded-lg bg-app-surface px-4 py-2 text-sm font-semibold text-app-primary shadow-sm';

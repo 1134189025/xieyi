@@ -1,10 +1,15 @@
 import { prisma } from '../db.ts';
+import { getShanghaiDayRange, getShanghaiWeekRange } from '../utils/shanghai-time.ts';
 
 export async function getDashboardStats() {
+  const shanghaiDayRange = getShanghaiDayRange(new Date());
+  const shanghaiWeekRange = getShanghaiWeekRange(new Date());
   const [
     totalOrders,
     pendingOrders,
-    completedOrders,
+    completedTotal,
+    completedToday,
+    completedThisWeek,
     failedOrders,
     cancelledOrders,
     expiredOrders,
@@ -14,6 +19,24 @@ export async function getDashboardStats() {
     prisma.order.count(),
     prisma.order.count({ where: { status: 'PENDING_PAYMENT' } }),
     prisma.order.count({ where: { status: 'PAYMENT_COMPLETED' } }),
+    prisma.order.count({
+      where: {
+        status: 'PAYMENT_COMPLETED',
+        completedAt: {
+          gte: shanghaiDayRange.start,
+          lt: shanghaiDayRange.end,
+        },
+      },
+    }),
+    prisma.order.count({
+      where: {
+        status: 'PAYMENT_COMPLETED',
+        completedAt: {
+          gte: shanghaiWeekRange.start,
+          lt: shanghaiWeekRange.end,
+        },
+      },
+    }),
     prisma.order.count({ where: { status: 'FAILED' } }),
     prisma.order.count({ where: { status: 'CANCELLED' } }),
     prisma.order.count({ where: { status: 'EXPIRED' } }),
@@ -35,26 +58,14 @@ export async function getDashboardStats() {
     ORDER BY date ASC
   `;
 
-  const workerPerformance = await prisma.user.findMany({
-    where: { role: 'WORKER', completedOrders: { some: {} } },
-    select: {
-      id: true,
-      displayName: true,
-      username: true,
-      _count: { select: { completedOrders: true } },
-      completedOrders: {
-        select: { createdAt: true, completedAt: true },
-        orderBy: { completedAt: 'desc' },
-        take: 100,
-      },
-    },
-  });
-
   return {
     totals: {
       totalOrders,
       pendingOrders,
-      completedOrders,
+      completedOrders: completedTotal,
+      completedTotal,
+      completedToday,
+      completedThisWeek,
       failedOrders,
       cancelledOrders,
       expiredOrders,
@@ -67,21 +78,5 @@ export async function getDashboardStats() {
       completed: Number(row.completed),
       failed: Number(row.failed),
     })),
-    workerPerformance: workerPerformance.map((w) => {
-      const completionTimes = w.completedOrders
-        .filter((o) => o.completedAt)
-        .map((o) => (o.completedAt!.getTime() - o.createdAt.getTime()) / 60000);
-      const avgMinutes =
-        completionTimes.length > 0
-          ? Math.round(completionTimes.reduce((a, b) => a + b, 0) / completionTimes.length)
-          : 0;
-
-      return {
-        workerId: w.id,
-        displayName: w.displayName ?? w.username,
-        completedCount: w._count.completedOrders,
-        avgCompletionMinutes: avgMinutes,
-      };
-    }),
   };
 }

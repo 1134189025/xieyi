@@ -8,11 +8,6 @@ import { prisma } from '../db.ts';
 
 let io: Server;
 
-type ClaimableOrder = Order & {
-  claimedById: string | null;
-  claimedAt: Date | null;
-};
-
 export function setupWebSocket(httpServer: HttpServer) {
   io = new Server(httpServer, {
     cors: { origin: config.corsOrigin, credentials: true },
@@ -69,7 +64,6 @@ export function setupWebSocket(httpServer: HttpServer) {
 export function broadcastOrderNew(order: Order) {
   if (!io) return;
 
-  const claimableOrder = order as ClaimableOrder;
   const summary = {
     id: order.id,
     trackingToken: order.trackingToken,
@@ -78,34 +72,11 @@ export function broadcastOrderNew(order: Order) {
     pixQrPngBase64: order.pixQrPng ? Buffer.from(order.pixQrPng).toString('base64') : null,
     pixExpiresAt: order.pixExpiresAt?.toISOString() ?? null,
     pixImageUrl: order.pixImageUrl,
-    claimedById: claimableOrder.claimedById ?? null,
-    claimedAt: claimableOrder.claimedAt?.toISOString() ?? null,
     createdAt: order.createdAt.toISOString(),
   };
 
   io.of('/worker').emit('order:new', summary);
   io.of('/admin').emit('order:new', summary);
-}
-
-export function broadcastOrderClaimed(order: Order) {
-  if (!io) return;
-
-  const claimableOrder = order as ClaimableOrder;
-  const payload = {
-    id: claimableOrder.id,
-    trackingToken: claimableOrder.trackingToken,
-    status: claimableOrder.status,
-    pixCode: claimableOrder.pixCode,
-    pixQrPngBase64: claimableOrder.pixQrPng ? Buffer.from(claimableOrder.pixQrPng).toString('base64') : null,
-    pixExpiresAt: claimableOrder.pixExpiresAt?.toISOString() ?? null,
-    pixImageUrl: claimableOrder.pixImageUrl,
-    claimedById: claimableOrder.claimedById,
-    claimedAt: claimableOrder.claimedAt?.toISOString() ?? null,
-    createdAt: claimableOrder.createdAt.toISOString(),
-  };
-
-  io.of('/worker').emit('order:claimed', payload);
-  io.of('/admin').emit('order:claimed', payload);
 }
 
 export function broadcastOrderStatusChange(order: Order) {
@@ -117,14 +88,10 @@ export function broadcastOrderStatusChange(order: Order) {
     status: order.status,
     completedAt: order.completedAt?.toISOString() ?? null,
   };
-  const workerPayload = {
-    ...publicPayload,
-    completedById: order.completedById ?? null,
-  };
 
   io.of('/orders').to(`order:${order.trackingToken}`).emit('order:status', publicPayload);
-  io.of('/worker').emit('order:completed', workerPayload);
-  io.of('/admin').emit('order:completed', workerPayload);
+  io.of('/worker').emit('order:completed', publicPayload);
+  io.of('/admin').emit('order:completed', publicPayload);
 }
 
 async function verifySocketUser(token: string): Promise<JwtPayload> {

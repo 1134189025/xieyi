@@ -25,7 +25,6 @@ export async function listWorkers() {
   const workers = await prisma.user.findMany({
     where: { role: 'WORKER' },
     orderBy: { createdAt: 'desc' },
-    include: { _count: { select: { completedOrders: true } } },
   });
 
   return workers.map((w) => ({
@@ -34,7 +33,6 @@ export async function listWorkers() {
     displayName: w.displayName,
     enabled: w.enabled,
     createdAt: w.createdAt.toISOString(),
-    completedOrderCount: w._count.completedOrders,
   }));
 }
 

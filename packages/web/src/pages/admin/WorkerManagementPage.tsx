@@ -10,7 +10,6 @@ interface WorkerItem {
   displayName: string | null;
   enabled: boolean;
   createdAt: string;
-  completedOrderCount: number;
 }
 
 export default function WorkerManagementPage() {
@@ -136,12 +135,11 @@ export default function WorkerManagementPage() {
           <div className="py-10 text-center text-app-secondary">{error}</div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="min-w-[720px] w-full text-sm">
+            <table className="min-w-[640px] w-full text-sm">
               <thead className="bg-neutral-50">
                 <tr>
                   <th className="px-6 py-3 text-left font-medium text-app-secondary">用户名</th>
                   <th className="px-6 py-3 text-left font-medium text-app-secondary">显示名称</th>
-                  <th className="px-6 py-3 text-left font-medium text-app-secondary">完成订单</th>
                   <th className="px-6 py-3 text-left font-medium text-app-secondary">状态</th>
                   <th className="px-6 py-3 text-left font-medium text-app-secondary">创建时间</th>
                   <th className="px-6 py-3 text-right font-medium text-app-secondary">操作</th>
@@ -152,11 +150,6 @@ export default function WorkerManagementPage() {
                   <tr key={worker.id} className="hover:bg-neutral-50">
                     <td className="px-6 py-3 font-medium">{worker.username}</td>
                     <td className="px-6 py-3 text-app-secondary">{worker.displayName ?? '-'}</td>
-                    <td className="px-6 py-3">
-                      <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-xs text-app-primary">
-                        {worker.completedOrderCount}
-                      </span>
-                    </td>
                     <td className="px-6 py-3">
                       {worker.enabled ? (
                         <span className="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">启用</span>
