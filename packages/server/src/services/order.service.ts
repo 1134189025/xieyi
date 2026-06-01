@@ -7,7 +7,8 @@ import { encrypt } from '../utils/crypto.ts';
 import { parseChatGptSessionInput, resolveAccessToken, createCheckoutUrl } from './chatgpt-session.service.ts';
 import { generatePixPayment } from './pix-payment.service.ts';
 import { getConfiguredProxyUrl } from './settings.service.ts';
-import { broadcastOrderClaimed, broadcastOrderNew, broadcastOrderStatusChange } from '../ws/index.ts';
+import { broadcastOrderNew, broadcastOrderStatusChange } from '../ws/index.ts';
+import { getShanghaiDayRange, getShanghaiWeekRange } from '../utils/shanghai-time.ts';
 
 const SAFE_PAYMENT_ERROR_MESSAGE = '支付创建失败，请稍后重试';
 const ORDER_STATE_CHANGED_MESSAGE = '订单状态已变化，请重新提交或联系管理员';
@@ -37,11 +38,6 @@ interface CreatingPaymentOrder {
   pixCode: string | null;
   pixImageUrl: string | null;
 }
-
-type ClaimableOrder = Order & {
-  claimedById: string | null;
-  claimedAt: Date | null;
-};
 
 type QueueCalculationSource = 'recent_completion_cadence' | 'default';
 
@@ -298,11 +294,8 @@ async function buildPublicOrderView(order: Order) {
   };
 }
 
-export async function getWorkerOrders(workerId: string, page: number, limit: number) {
-  const workerQueueWhere: Prisma.OrderWhereInput = {
-    status: 'PENDING_PAYMENT',
-    OR: [{ claimedById: null }, { claimedById: workerId }],
-  };
+export async function getWorkerOrders(page: number, limit: number) {
+  const workerQueueWhere: Prisma.OrderWhereInput = { status: 'PENDING_PAYMENT' };
   const [orders, total] = await Promise.all([
     prisma.order.findMany({
       where: workerQueueWhere,
@@ -314,14 +307,14 @@ export async function getWorkerOrders(workerId: string, page: number, limit: num
   ]);
 
   return {
-    orders: orders.map((order) => buildWorkerOrderView(order as ClaimableOrder, workerId)),
+    orders: orders.map(buildWorkerOrderView),
     total,
     page,
     limit,
   };
 }
 
-function buildWorkerOrderView(order: ClaimableOrder, workerId: string) {
+function buildWorkerOrderView(order: Order) {
   return {
     id: order.id,
     trackingToken: order.trackingToken,
@@ -330,9 +323,6 @@ function buildWorkerOrderView(order: ClaimableOrder, workerId: string) {
     pixQrPngBase64: order.pixQrPng ? Buffer.from(order.pixQrPng).toString('base64') : null,
     pixExpiresAt: order.pixExpiresAt?.toISOString() ?? null,
     pixImageUrl: order.pixImageUrl,
-    claimedById: order.claimedById,
-    claimedAt: order.claimedAt?.toISOString() ?? null,
-    isClaimedByCurrentWorker: order.claimedById === workerId,
     createdAt: order.createdAt.toISOString(),
   };
 }
@@ -421,39 +411,12 @@ function safeQueueEstimateLog(error: unknown): string {
   return `error=${name}${codeText}`;
 }
 
-export async function claimOrder(orderId: string, workerId: string) {
-  const claimedAt = new Date();
-  const changed = await prisma.order.updateMany({
-    where: { id: orderId, status: 'PENDING_PAYMENT', claimedById: null },
-    data: { claimedById: workerId, claimedAt },
-  });
-
-  if (changed.count === 1) {
-    const claimedOrder = await prisma.order.findUnique({ where: { id: orderId } });
-    if (!claimedOrder) throw new AppError(404, 'Order not found');
-    broadcastOrderClaimed(claimedOrder);
-    return buildWorkerOrderView(claimedOrder as ClaimableOrder, workerId);
-  }
-
-  const existingOrder = await prisma.order.findUnique({ where: { id: orderId } });
-  if (!existingOrder) throw new AppError(404, 'Order not found');
-  const claimableOrder = existingOrder as ClaimableOrder;
-  if (claimableOrder.status !== 'PENDING_PAYMENT') {
-    throw new AppError(409, `Order is ${claimableOrder.status}, cannot claim`);
-  }
-  if (claimableOrder.claimedById === workerId) {
-    return buildWorkerOrderView(claimableOrder, workerId);
-  }
-  throw new AppError(409, 'Order already claimed');
-}
-
-export async function completeOrder(orderId: string, workerId: string) {
+export async function completeOrder(orderId: string) {
   const completedAt = new Date();
   const changed = await prisma.order.updateMany({
-    where: { id: orderId, status: 'PENDING_PAYMENT', claimedById: workerId },
+    where: { id: orderId, status: 'PENDING_PAYMENT' },
     data: {
       status: 'PAYMENT_COMPLETED',
-      completedById: workerId,
       completedAt,
     },
   });
@@ -461,11 +424,7 @@ export async function completeOrder(orderId: string, workerId: string) {
   if (changed.count === 0) {
     const order = await prisma.order.findUnique({ where: { id: orderId } });
     if (!order) throw new AppError(404, 'Order not found');
-    const claimableOrder = order as ClaimableOrder;
-    if (claimableOrder.status === 'PENDING_PAYMENT' && claimableOrder.claimedById !== workerId) {
-      throw new AppError(409, 'Order must be claimed by current worker before completion');
-    }
-    throw new AppError(409, `Order is ${claimableOrder.status}, cannot complete`);
+    throw new AppError(409, `Order is ${order.status}, cannot complete`);
   }
 
   const updated = await prisma.order.findUnique({ where: { id: orderId } });
@@ -475,32 +434,34 @@ export async function completeOrder(orderId: string, workerId: string) {
   return { id: updated.id, status: updated.status, completedAt: updated.completedAt?.toISOString() };
 }
 
-export async function getWorkerSummary(workerId: string) {
+export async function getWorkerSummary() {
   const shanghaiDayRange = getShanghaiDayRange(new Date());
-  const completedToday = await prisma.order.count({
-    where: {
-      status: 'PAYMENT_COMPLETED',
-      completedById: workerId,
-      completedAt: {
-        gte: shanghaiDayRange.start,
-        lt: shanghaiDayRange.end,
+  const shanghaiWeekRange = getShanghaiWeekRange(new Date());
+  const [completedTotal, completedToday, completedThisWeek] = await Promise.all([
+    prisma.order.count({
+      where: { status: 'PAYMENT_COMPLETED' },
+    }),
+    prisma.order.count({
+      where: {
+        status: 'PAYMENT_COMPLETED',
+        completedAt: {
+          gte: shanghaiDayRange.start,
+          lt: shanghaiDayRange.end,
+        },
       },
-    },
-  });
+    }),
+    prisma.order.count({
+      where: {
+        status: 'PAYMENT_COMPLETED',
+        completedAt: {
+          gte: shanghaiWeekRange.start,
+          lt: shanghaiWeekRange.end,
+        },
+      },
+    }),
+  ]);
 
-  return { completedToday };
-}
-
-function getShanghaiDayRange(now: Date) {
-  const shanghaiOffsetMs = 8 * 60 * 60 * 1000;
-  const shanghaiNow = new Date(now.getTime() + shanghaiOffsetMs);
-  const start = new Date(Date.UTC(
-    shanghaiNow.getUTCFullYear(),
-    shanghaiNow.getUTCMonth(),
-    shanghaiNow.getUTCDate(),
-  ) - shanghaiOffsetMs);
-  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
-  return { start, end };
+  return { completedTotal, completedToday, completedThisWeek };
 }
 
 export async function getAdminOrders(filters: {
@@ -519,7 +480,6 @@ export async function getAdminOrders(filters: {
       orderBy: { createdAt: 'desc' },
       skip: (filters.page - 1) * filters.limit,
       take: filters.limit,
-      include: { completedBy: { select: { id: true, displayName: true, username: true } } },
     }),
     prisma.order.count({ where }),
   ]);
@@ -532,11 +492,6 @@ export async function getAdminOrders(filters: {
       pixCode: o.pixCode,
       checkoutSessionId: o.checkoutSessionId,
       errorMessage: o.errorMessage,
-      completedBy: o.completedBy
-        ? { id: o.completedBy.id, displayName: o.completedBy.displayName ?? o.completedBy.username }
-        : o.status === 'PAYMENT_COMPLETED'
-          ? { id: 'auto-payment-detection', displayName: '自动检测' }
-        : null,
       completedAt: o.completedAt?.toISOString() ?? null,
       createdAt: o.createdAt.toISOString(),
     })),

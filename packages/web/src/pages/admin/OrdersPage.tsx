@@ -13,7 +13,6 @@ interface OrderItem {
   pixCode: string | null;
   checkoutSessionId: string | null;
   errorMessage: string | null;
-  completedBy: { id: string; displayName: string } | null;
   completedAt: string | null;
   createdAt: string;
 }
@@ -89,12 +88,11 @@ export default function OrdersPage() {
           <div className="py-10 text-center text-app-secondary">{error}</div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="min-w-[760px] w-full text-sm">
+            <table className="min-w-[680px] w-full text-sm">
               <thead className="bg-neutral-50">
                 <tr>
                   <th className="px-6 py-3 text-left font-medium text-app-secondary">追踪码</th>
                   <th className="px-6 py-3 text-left font-medium text-app-secondary">状态</th>
-                  <th className="px-6 py-3 text-left font-medium text-app-secondary">工人</th>
                   <th className="px-6 py-3 text-left font-medium text-app-secondary">创建时间</th>
                   <th className="px-6 py-3 text-left font-medium text-app-secondary">完成时间</th>
                   <th className="px-6 py-3 text-right font-medium text-app-secondary">操作</th>
@@ -106,9 +104,6 @@ export default function OrdersPage() {
                     <td className="px-6 py-3 font-mono text-xs">{order.trackingToken}</td>
                     <td className="px-6 py-3">
                       <StatusBadge status={order.status} />
-                    </td>
-                    <td className="px-6 py-3 text-app-secondary">
-                      {order.completedBy?.displayName ?? '-'}
                     </td>
                     <td className="px-6 py-3 text-app-secondary">
                       {new Date(order.createdAt).toLocaleString('zh-CN')}

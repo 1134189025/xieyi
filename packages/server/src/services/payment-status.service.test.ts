@@ -44,14 +44,13 @@ describe('payment-status.service', () => {
     expect(retrieveStripeSetupIntentStatus).not.toHaveBeenCalled();
   });
 
-  it('Stripe 返回 succeeded 时把领取工人记录为完成人并广播', async () => {
+  it('Stripe 返回 succeeded 时只按状态自动完成订单并广播', async () => {
     const pendingOrder = {
       id: 'order-1',
       trackingToken: 'track-1',
       status: 'PENDING_PAYMENT',
       setupIntentId: 'seti_123',
       setupIntentClientSecret: 'encrypted:seti_123_secret_456',
-      claimedById: 'worker-1',
     };
     const completedOrder = {
       ...pendingOrder,
@@ -81,44 +80,10 @@ describe('payment-status.service', () => {
       where: { id: 'order-1', status: 'PENDING_PAYMENT' },
       data: {
         status: 'PAYMENT_COMPLETED',
-        completedById: 'worker-1',
         completedAt: expect.any(Date),
       },
     });
     expect(broadcastOrderStatusChange).toHaveBeenCalledWith(completedOrder);
-  });
-
-  it('Stripe 返回 succeeded 但订单无人领取时仍自动完成且不计入工人', async () => {
-    const pendingOrder = {
-      id: 'order-1',
-      trackingToken: 'track-1',
-      status: 'PENDING_PAYMENT',
-      setupIntentId: 'seti_123',
-      setupIntentClientSecret: 'encrypted:seti_123_secret_456',
-      claimedById: null,
-    };
-    prisma.order.findMany.mockResolvedValue([pendingOrder]);
-    prisma.order.updateMany.mockResolvedValue({ count: 1 });
-    prisma.order.findUnique.mockResolvedValue({
-      ...pendingOrder,
-      status: 'PAYMENT_COMPLETED',
-      completedAt: new Date('2026-06-01T00:00:00.000Z'),
-    });
-    retrieveStripeSetupIntentStatus.mockResolvedValue({ id: 'seti_123', status: 'succeeded' });
-
-    await expect(detectCompletedPixPayments()).resolves.toMatchObject({
-      checked: 1,
-      completed: 1,
-    });
-
-    expect(prisma.order.updateMany).toHaveBeenCalledWith({
-      where: { id: 'order-1', status: 'PENDING_PAYMENT' },
-      data: {
-        status: 'PAYMENT_COMPLETED',
-        completedById: null,
-        completedAt: expect.any(Date),
-      },
-    });
   });
 
   it('自动检测按客户队列一致的稳定顺序扫描待支付订单', async () => {

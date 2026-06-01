@@ -204,7 +204,7 @@ server {
 
 1. 登录后台 → 进入「兑换码」页面 → 批量生成兑换码
 2. 进入「工人管理」→ 创建工人账号
-3. 在「看板」查看订单统计和工人绩效
+3. 在「看板」查看总已完成、今日已完成、本周已完成等订单统计
 
 ### 客户
 
@@ -229,7 +229,7 @@ server {
         ↓
 调用 Stripe 协议支付 → 生成 Pix 二维码
         ↓
-工人领取订单 → 扫码或复制 Pix 付款码 → 自动检测或手动标记完成 → WebSocket 实时通知客户
+工人扫码或复制 Pix 付款码 → 自动检测或手动标记完成 → WebSocket 实时通知客户
 ```
 
 ## API 端点
@@ -239,10 +239,9 @@ server {
 | POST | /api/auth/login | 登录 | 无 |
 | POST | /api/orders | 客户提交订单 | 无 |
 | GET | /api/orders/track/:token | 查询订单状态 | 无 |
-| GET | /api/worker/orders | 未领取和当前工人已领取的待支付订单 | Worker/Admin |
-| GET | /api/worker/summary | 当前工人今日完成数 | Worker/Admin |
-| POST | /api/worker/orders/:id/claim | 领取订单 | Worker/Admin |
-| POST | /api/worker/orders/:id/complete | 标记已领取订单完成 | Worker/Admin |
+| GET | /api/worker/orders | 全部待支付订单 | Worker/Admin |
+| GET | /api/worker/summary | 总体/今日/本周完成数 | Worker/Admin |
+| POST | /api/worker/orders/:id/complete | 标记待支付订单完成 | Worker/Admin |
 | POST | /api/admin/redemption-codes | 批量生成兑换码 | Admin |
 | GET | /api/admin/redemption-codes | 兑换码列表 | Admin |
 | POST | /api/admin/workers | 创建工人 | Admin |
