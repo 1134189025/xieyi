@@ -11,7 +11,7 @@ router.post('/', async (req, res, next) => {
     if (!parsed.success) throw new AppError(400, 'Invalid input: redemptionCode and session are required');
 
     const result = await createOrder(parsed.data.redemptionCode, parsed.data.session);
-    res.status(201).json(result);
+    res.status(202).json(result);
   } catch (error) {
     next(error);
   }

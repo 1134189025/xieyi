@@ -4,42 +4,37 @@ import type { Order, Prisma } from '@prisma/client';
 import { prisma } from '../db.ts';
 import { AppError } from '../middleware/error-handler.ts';
 import { encrypt } from '../utils/crypto.ts';
-import { parseChatGptSessionInput, resolveAccessToken, createCheckoutUrl } from './chatgpt-session.service.ts';
-import { generatePixPayment } from './pix-payment.service.ts';
-import { getConfiguredProxyUrl } from './settings.service.ts';
-import { broadcastOrderNew, broadcastOrderStatusChange } from '../ws/index.ts';
+import { broadcastOrderStatusChange } from '../ws/index.ts';
 import { getShanghaiDayRange, getShanghaiWeekRange } from '../utils/shanghai-time.ts';
+import { getMaintenanceModeSetting } from './settings.service.ts';
+import {
+  enqueuePixGenerationJob,
+  getPixGenerationQueueSnapshot,
+  secondsPerGenerationEstimate,
+} from '../queues/pix-generation.queue.ts';
 
 const SAFE_PAYMENT_ERROR_MESSAGE = '支付创建失败，请稍后重试';
-const ORDER_STATE_CHANGED_MESSAGE = '订单状态已变化，请重新提交或联系管理员';
 const ORDER_CREATE_BUSY_MESSAGE = '订单创建繁忙，请稍后重试';
+const ORDER_QUEUE_UNAVAILABLE_MESSAGE = '订单排队失败，请稍后重试';
 const DEFAULT_QUEUE_SECONDS_PER_ORDER = 5 * 60;
 const MIN_QUEUE_SECONDS_PER_ORDER = 60;
 const MAX_QUEUE_SECONDS_PER_ORDER = 30 * 60;
 const RECENT_COMPLETION_LOOKBACK_MS = 24 * 60 * 60 * 1000;
 const RECENT_COMPLETION_SAMPLE_LIMIT = 20;
 const MIN_RECENT_COMPLETION_SAMPLES = 3;
-const SAFE_PAYMENT_ERROR_CODES = new Set([
-  'PAYMENT_FAILED',
-  'CHATGPT_SESSION_FAILED',
-  'CHATGPT_CHECKOUT_FAILED',
-  'UPSTREAM_TIMEOUT',
-  'CHATGPT_SESSION_UNRECOGNIZED',
-  'ORDER_STATE_CHANGED',
-  'ACCOUNT_NOT_ELIGIBLE',
-  'ORDER_CREATE_BUSY',
-]);
 
 interface CreatingPaymentOrder {
   id: string;
   trackingToken: string;
   status: string;
-  redemptionCodeId: string;
+  redemptionCodeId: string | null;
   pixCode: string | null;
   pixImageUrl: string | null;
+  createdAt: Date;
+  generationQueuedAt: Date | null;
 }
 
-type QueueCalculationSource = 'recent_completion_cadence' | 'default';
+type QueueCalculationSource = 'recent_completion_cadence' | 'default' | 'generation_queue';
 
 interface QueueEstimate {
   ordersAhead: number;
@@ -49,80 +44,37 @@ interface QueueEstimate {
   secondsPerOrder: number;
   calculationSource: QueueCalculationSource;
   calculatedAt: string;
+  currentGenerationCount?: number;
 }
 
-export async function createOrder(redemptionCode: string, session: string) {
-  const chatGptCredential = parseChatGptSessionInput(session);
-  const proxyUrl = await getConfiguredProxyUrl();
-  const externalRequestOptions = {
-    proxyUrl: proxyUrl ?? undefined,
-    retry: { attempts: 3 },
-  };
+type OrderWithGeneration = Order & {
+  generationQueuedAt?: Date | null;
+  generationStartedAt?: Date | null;
+  generationFinishedAt?: Date | null;
+  generationErrorCode?: string | null;
+  submittedRedemptionCode?: string | null;
+};
 
-  const trackingToken = nanoid(12);
-  const encryptedSession = encrypt(session);
-  const reservedAt = new Date();
-  let order = await createCreatingPaymentOrder({
+export async function createOrder(redemptionCode: string, session: string) {
+  const maintenanceMode = await getMaintenanceModeSetting();
+  if (maintenanceMode.enabled) {
+    throw new AppError(503, '系统维护中，请稍后再提交', 'MAINTENANCE_MODE');
+  }
+
+  const order = await createCreatingPaymentOrder({
     redemptionCode,
-    reservedAt,
-    trackingToken,
-    encryptedSession,
+    reservedAt: new Date(),
+    trackingToken: nanoid(12),
+    encryptedSession: encrypt(session),
   });
 
   try {
-    const accessToken = await resolveAccessToken(chatGptCredential, externalRequestOptions);
-    const checkoutUrl = await createCheckoutUrl(accessToken, externalRequestOptions);
-    const { stripeResult, profile, qrPngBuffer } = await generatePixPayment(checkoutUrl, externalRequestOptions);
-
-    const pixExpiresAt = stripeResult.pix.expiresAt
-      ? new Date(stripeResult.pix.expiresAt * 1000)
-      : null;
-
-    const pendingOrderData = {
-        status: 'PENDING_PAYMENT',
-        checkoutSessionId: stripeResult.checkoutSessionId,
-        checkoutUrl,
-        paymentMethodId: stripeResult.paymentMethodId,
-        pixCode: stripeResult.pix.data,
-        pixQrPng: new Uint8Array(qrPngBuffer),
-        pixExpiresAt,
-        pixImageUrl: stripeResult.pix.imageUrlPng,
-        setupIntentId: stripeResult.pix.setupIntentId ?? null,
-        setupIntentClientSecret: stripeResult.pix.setupIntentClientSecret
-          ? encrypt(stripeResult.pix.setupIntentClientSecret)
-          : null,
-        billingProfileJson: profile as object,
-        encryptedSessionData: null,
-    } as const;
-
-    const changed = await prisma.order.updateMany({
-      where: { id: order.id, status: 'CREATING_PAYMENT' },
-      data: pendingOrderData,
-    });
-
-    if (changed.count === 0) {
-      throw new AppError(409, ORDER_STATE_CHANGED_MESSAGE, 'ORDER_STATE_CHANGED');
-    }
-
-    const updatedOrder = await prisma.order.findUnique({ where: { id: order.id } });
-    if (!updatedOrder) throw new AppError(502, SAFE_PAYMENT_ERROR_MESSAGE, 'PAYMENT_FAILED');
-
-    broadcastOrderNew(updatedOrder);
-
-    return {
-      trackingToken: updatedOrder.trackingToken,
-      status: updatedOrder.status,
-      pixCode: updatedOrder.pixCode,
-      pixQrPngBase64: qrPngBuffer.toString('base64'),
-      pixExpiresAt: pixExpiresAt?.toISOString() ?? null,
-      pixImageUrl: updatedOrder.pixImageUrl,
-      queueEstimate: await safeCalculateQueueEstimate(updatedOrder),
-    };
+    await enqueuePixGenerationJob({ orderId: order.id });
+    return buildPublicOrderView(toOrderLike(order));
   } catch (error) {
-    console.error('Payment creation failed:', error);
+    console.error(`Pix generation enqueue failed order=${order.id} ${safeQueueEstimateLog(error)}`);
     await releaseCreatingPaymentOrder(order.id);
-
-    throw toPublicPaymentCreationError(error);
+    throw new AppError(502, ORDER_QUEUE_UNAVAILABLE_MESSAGE, 'ORDER_QUEUE_UNAVAILABLE');
   }
 }
 
@@ -148,6 +100,8 @@ async function createCreatingPaymentOrder(input: {
           "status",
           "redemption_code_id",
           "encrypted_session_data",
+          "generation_queued_at",
+          "submitted_redemption_code",
           "created_at",
           "updated_at"
         )
@@ -157,6 +111,8 @@ async function createCreatingPaymentOrder(input: {
           'CREATING_PAYMENT'::"OrderStatus",
           reserved."id",
           ${input.encryptedSession},
+          ${input.reservedAt},
+          ${input.redemptionCode},
           NOW(),
           NOW()
         FROM reserved
@@ -166,7 +122,9 @@ async function createCreatingPaymentOrder(input: {
           "status",
           "redemption_code_id",
           "pix_code",
-          "pix_image_url"
+          "pix_image_url",
+          "created_at",
+          "generation_queued_at"
       )
       SELECT
         "id",
@@ -174,13 +132,13 @@ async function createCreatingPaymentOrder(input: {
         "status"::text AS "status",
         "redemption_code_id" AS "redemptionCodeId",
         "pix_code" AS "pixCode",
-        "pix_image_url" AS "pixImageUrl"
+        "pix_image_url" AS "pixImageUrl",
+        "created_at" AS "createdAt",
+        "generation_queued_at" AS "generationQueuedAt"
       FROM inserted
     `;
 
-    if (order) {
-      return order;
-    }
+    if (order) return order;
 
     const existingCode = await prisma.redemptionCode.findUnique({
       where: { code: input.redemptionCode },
@@ -208,6 +166,39 @@ async function releaseCreatingPaymentOrder(orderId: string) {
   `;
 }
 
+export async function failCreatingPaymentOrder(orderId: string, errorCode: string) {
+  const failedAt = new Date();
+  await prisma.$executeRaw`
+    WITH target AS (
+      SELECT "redemption_code_id"
+      FROM "orders"
+      WHERE "id" = ${orderId} AND "status" = 'CREATING_PAYMENT'
+    ),
+    failed AS (
+      UPDATE "orders"
+      SET
+        "status" = 'FAILED',
+        "generation_finished_at" = ${failedAt},
+        "generation_error_code" = ${errorCode},
+        "error_message" = ${SAFE_PAYMENT_ERROR_MESSAGE},
+        "redemption_code_id" = NULL,
+        "encrypted_session_data" = NULL,
+        "updated_at" = NOW()
+      FROM target
+      WHERE "orders"."id" = ${orderId}
+        AND "orders"."status" = 'CREATING_PAYMENT'
+      RETURNING target."redemption_code_id"
+    )
+    UPDATE "redemption_codes"
+    SET "used_at" = NULL
+    FROM failed
+    WHERE "redemption_codes"."id" = failed."redemption_code_id"
+  `;
+
+  const updatedOrder = await prisma.order.findUnique({ where: { id: orderId } });
+  if (updatedOrder) broadcastOrderStatusChange(updatedOrder);
+}
+
 function toPublicOrderCreationError(error: unknown): AppError {
   if (error instanceof AppError) return error;
   if (prismaErrorCode(error) === 'P2028') {
@@ -217,39 +208,6 @@ function toPublicOrderCreationError(error: unknown): AppError {
     return new AppError(400, 'Redemption code already used', 'CODE_USED');
   }
   return new AppError(502, SAFE_PAYMENT_ERROR_MESSAGE, 'PAYMENT_FAILED');
-}
-
-function toPublicPaymentCreationError(error: unknown): AppError {
-  if (error instanceof AppError) {
-    return error.code && SAFE_PAYMENT_ERROR_CODES.has(error.code)
-      ? error
-      : new AppError(502, SAFE_PAYMENT_ERROR_MESSAGE, 'PAYMENT_FAILED');
-  }
-
-  const orderCreationError = toPublicPrismaOrderError(error);
-  if (orderCreationError) return orderCreationError;
-
-  const candidate = error as { statusCode?: unknown; code?: unknown; message?: unknown };
-  if (
-    typeof candidate.statusCode === 'number' &&
-    typeof candidate.code === 'string' &&
-    SAFE_PAYMENT_ERROR_CODES.has(candidate.code) &&
-    typeof candidate.message === 'string'
-  ) {
-    return new AppError(candidate.statusCode, candidate.message, candidate.code);
-  }
-
-  return new AppError(502, SAFE_PAYMENT_ERROR_MESSAGE, 'PAYMENT_FAILED');
-}
-
-function toPublicPrismaOrderError(error: unknown): AppError | null {
-  if (prismaErrorCode(error) === 'P2028') {
-    return new AppError(409, ORDER_CREATE_BUSY_MESSAGE, 'ORDER_CREATE_BUSY');
-  }
-  if (isRedemptionCodeOrderUniqueConflict(error)) {
-    return new AppError(400, 'Redemption code already used', 'CODE_USED');
-  }
-  return null;
 }
 
 function isRedemptionCodeOrderUniqueConflict(error: unknown): boolean {
@@ -328,6 +286,9 @@ function buildWorkerOrderView(order: Order) {
 }
 
 async function calculateQueueEstimate(order: Order): Promise<QueueEstimate | null> {
+  if (order.status === 'CREATING_PAYMENT') {
+    return calculateGenerationQueueEstimate(order);
+  }
   if (order.status !== 'PENDING_PAYMENT') return null;
 
   const [ordersAhead, pendingTotal, cadence] = await Promise.all([
@@ -353,6 +314,38 @@ async function calculateQueueEstimate(order: Order): Promise<QueueEstimate | nul
     calculationSource: cadence.calculationSource,
     calculatedAt: new Date().toISOString(),
   };
+}
+
+async function calculateGenerationQueueEstimate(order: Order): Promise<QueueEstimate> {
+  const snapshot = await getPixGenerationQueueSnapshot();
+  const indexInQueue = snapshot.orderIdsInQueue.indexOf(order.id);
+  const ordersAhead = indexInQueue >= 0
+    ? indexInQueue
+    : await countCreatingPaymentOrdersAhead(order);
+  const secondsPerOrder = secondsPerGenerationEstimate();
+
+  return {
+    ordersAhead,
+    position: ordersAhead + 1,
+    pendingTotal: Math.max(snapshot.waitingCount + snapshot.delayedCount + snapshot.activeCount, ordersAhead + 1),
+    currentGenerationCount: snapshot.activeCount,
+    estimatedQueueSeconds: ordersAhead * secondsPerOrder,
+    secondsPerOrder,
+    calculationSource: 'generation_queue',
+    calculatedAt: new Date().toISOString(),
+  };
+}
+
+async function countCreatingPaymentOrdersAhead(order: Order): Promise<number> {
+  return prisma.order.count({
+    where: {
+      status: 'CREATING_PAYMENT',
+      OR: [
+        { createdAt: { lt: order.createdAt } },
+        { createdAt: order.createdAt, id: { lt: order.id } },
+      ],
+    },
+  });
 }
 
 async function safeCalculateQueueEstimate(order: Order): Promise<QueueEstimate | null> {
@@ -485,15 +478,15 @@ export async function getAdminOrders(filters: {
   ]);
 
   return {
-    orders: orders.map((o) => ({
-      id: o.id,
-      trackingToken: o.trackingToken,
-      status: o.status,
-      pixCode: o.pixCode,
-      checkoutSessionId: o.checkoutSessionId,
-      errorMessage: o.errorMessage,
-      completedAt: o.completedAt?.toISOString() ?? null,
-      createdAt: o.createdAt.toISOString(),
+    orders: orders.map((order) => ({
+      id: order.id,
+      trackingToken: order.trackingToken,
+      status: order.status,
+      pixCode: order.pixCode,
+      checkoutSessionId: order.checkoutSessionId,
+      errorMessage: order.errorMessage,
+      completedAt: order.completedAt?.toISOString() ?? null,
+      createdAt: order.createdAt.toISOString(),
     })),
     total,
     page: filters.page,
@@ -542,4 +535,34 @@ export async function expirePendingOrders() {
       broadcastOrderStatusChange(order);
     }
   }
+}
+
+function toOrderLike(order: CreatingPaymentOrder): Order {
+  return {
+    id: order.id,
+    trackingToken: order.trackingToken,
+    status: order.status,
+    redemptionCodeId: order.redemptionCodeId,
+    checkoutSessionId: null,
+    checkoutUrl: null,
+    paymentMethodId: null,
+    setupIntentId: null,
+    setupIntentClientSecret: null,
+    pixCode: order.pixCode,
+    pixQrPng: null,
+    pixExpiresAt: null,
+    pixImageUrl: order.pixImageUrl,
+    billingProfileJson: null,
+    encryptedSessionData: null,
+    errorMessage: null,
+    completedById: null,
+    completedAt: null,
+    createdAt: order.createdAt,
+    updatedAt: order.createdAt,
+    generationQueuedAt: order.generationQueuedAt,
+    generationStartedAt: null,
+    generationFinishedAt: null,
+    generationErrorCode: null,
+    submittedRedemptionCode: null,
+  } as unknown as OrderWithGeneration;
 }

@@ -1,5 +1,5 @@
 export const ORDER_STATUS_LABELS: Record<string, string> = {
-  CREATING_PAYMENT: '正在生成支付二维码',
+  CREATING_PAYMENT: '正在排队生成 Pix',
   PENDING_PAYMENT: '待支付',
   PAYMENT_COMPLETED: '已完成',
   FAILED: '失败',
@@ -37,6 +37,9 @@ const ERROR_CODE_LABELS: Record<string, string> = {
   ACCOUNT_NOT_ELIGIBLE: '账号无资格，无法生成 Pix 支付',
   ORDER_STATE_CHANGED: '订单状态已变化，请重新提交或联系管理员',
   ORDER_CREATE_BUSY: '订单创建繁忙，请稍后重试',
+  ORDER_QUEUE_UNAVAILABLE: '订单排队失败，请稍后重试',
+  MAINTENANCE_MODE: '系统维护中，请稍后再提交',
+  NO_HEALTHY_PROXY: '暂无可用代理，请稍后重试',
   UPSTREAM_TIMEOUT: '外部服务请求超时，请稍后重试',
   RATE_LIMITED: '请求过于频繁，请稍后再试',
   INTERNAL_ERROR: '服务器内部错误，请稍后重试',

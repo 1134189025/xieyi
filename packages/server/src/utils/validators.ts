@@ -41,10 +41,15 @@ export const updateOrderSchema = z.object({
 });
 
 export const updateProxySettingSchema = z.object({
-  proxy: z.string().max(1000).trim().nullable(),
+  chatGptProxyPool: z.string().max(10000).trim().nullable().optional(),
+  stripeProxyPool: z.string().max(10000).trim().nullable().optional(),
 });
 
 export const updateAutoPaymentDetectionSettingSchema = z.object({
+  enabled: z.boolean(),
+});
+
+export const updateMaintenanceModeSettingSchema = z.object({
   enabled: z.boolean(),
 });
 

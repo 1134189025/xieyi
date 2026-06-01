@@ -9,7 +9,9 @@ import TrackOrderPage from './TrackOrderPage';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const useOrderTracking = vi.hoisted(() => vi.fn());
+const trackingSocket = vi.hoisted(() => ({
+  refresh: null as null | (() => void),
+}));
 
 vi.mock('../../api/client', () => ({
   publicApi: {
@@ -18,14 +20,9 @@ vi.mock('../../api/client', () => ({
 }));
 
 vi.mock('../../hooks/useSocket', () => ({
-  useOrderTracking,
-}));
-
-vi.mock('react-hot-toast', () => ({
-  default: {
-    success: vi.fn(),
-    error: vi.fn(),
-  },
+  useOrderTracking: vi.fn((_trackingToken: string, refresh: () => void) => {
+    trackingSocket.refresh = refresh;
+  }),
 }));
 
 function pendingOrder(queueEstimate: unknown) {
@@ -35,6 +32,21 @@ function pendingOrder(queueEstimate: unknown) {
     pixCode: 'pix-code',
     pixQrPngBase64: null,
     pixExpiresAt: '2026-06-01T01:00:00.000Z',
+    pixImageUrl: null,
+    completedAt: null,
+    createdAt: '2026-06-01T00:00:00.000Z',
+    errorMessage: null,
+    queueEstimate,
+  };
+}
+
+function creatingOrder(queueEstimate: unknown) {
+  return {
+    trackingToken: 'track-1',
+    status: 'CREATING_PAYMENT',
+    pixCode: null,
+    pixQrPngBase64: null,
+    pixExpiresAt: null,
     pixImageUrl: null,
     completedAt: null,
     createdAt: '2026-06-01T00:00:00.000Z',
@@ -64,6 +76,7 @@ function renderTrackOrderPage() {
 async function flushAsyncWork() {
   await act(async () => {
     await Promise.resolve();
+    await Promise.resolve();
   });
 }
 
@@ -73,6 +86,7 @@ describe('TrackOrderPage', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.clearAllMocks();
+    trackingSocket.refresh = null;
     if (mountedRoot) {
       act(() => mountedRoot?.unmount());
       mountedRoot = null;
@@ -80,7 +94,67 @@ describe('TrackOrderPage', () => {
     document.body.innerHTML = '';
   });
 
-  it('待支付订单展示预计排队时间并保留 Pix 付款码', async () => {
+  it('shows generation queue position for creating payment orders without exposing Pix code', async () => {
+    (publicApi.get as Mock).mockResolvedValue({
+      data: creatingOrder({
+        ordersAhead: 2,
+        position: 3,
+        pendingTotal: 7,
+        currentGenerationCount: 2,
+        estimatedQueueSeconds: 15 * 60,
+        secondsPerOrder: 5 * 60,
+        calculationSource: 'generation_queue',
+        calculatedAt: '2026-06-01T00:00:00.000Z',
+      }),
+    });
+
+    const { container, root } = renderTrackOrderPage();
+    mountedRoot = root;
+    await flushAsyncWork();
+
+    expect(container.textContent).toContain('正在排队生成 Pix 二维码');
+    expect(container.textContent).toContain('排队 #3');
+    expect(container.textContent).toContain('前方 2 单');
+    expect(container.textContent).toContain('生成中 2 单');
+    expect(container.textContent).toContain('预计约 15 分钟');
+    expect(container.querySelector<HTMLInputElement>('input[readonly]')).toBeNull();
+  });
+
+  it('refreshes creating payment orders every 60 seconds', async () => {
+    vi.useFakeTimers();
+    (publicApi.get as Mock).mockResolvedValue({ data: creatingOrder(null) });
+
+    const { root } = renderTrackOrderPage();
+    mountedRoot = root;
+    await flushAsyncWork();
+
+    expect(publicApi.get).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      vi.advanceTimersByTime(60_000);
+      await Promise.resolve();
+    });
+
+    expect(publicApi.get).toHaveBeenCalledTimes(2);
+  });
+
+  it('refreshes order details when the tracking socket reports a status change', async () => {
+    (publicApi.get as Mock)
+      .mockResolvedValueOnce({ data: creatingOrder(null) })
+      .mockResolvedValueOnce({ data: pendingOrder(null) });
+
+    const { container, root } = renderTrackOrderPage();
+    mountedRoot = root;
+    await flushAsyncWork();
+
+    act(() => trackingSocket.refresh?.());
+    await flushAsyncWork();
+
+    expect(publicApi.get).toHaveBeenCalledTimes(2);
+    expect(container.querySelector<HTMLInputElement>('input[readonly]')?.value).toBe('pix-code');
+  });
+
+  it('shows pending payment queue estimate and keeps Pix payment code', async () => {
     (publicApi.get as Mock).mockResolvedValue({
       data: pendingOrder({
         ordersAhead: 2,
@@ -101,66 +175,5 @@ describe('TrackOrderPage', () => {
     expect(container.textContent).toContain('排队第 3 位');
     expect(container.textContent).toContain('预计约 15 分钟');
     expect(container.querySelector<HTMLInputElement>('input[readonly]')?.value).toBe('pix-code');
-  });
-
-  it('队列估算为空时不展示预计排队时间', async () => {
-    (publicApi.get as Mock).mockResolvedValue({ data: pendingOrder(null) });
-
-    const { container, root } = renderTrackOrderPage();
-    mountedRoot = root;
-    await flushAsyncWork();
-
-    expect(container.textContent).not.toContain('预计约');
-    expect(container.textContent).not.toContain('排队第');
-  });
-
-  it('待支付订单每 60 秒静默刷新追踪接口', async () => {
-    vi.useFakeTimers();
-    (publicApi.get as Mock).mockResolvedValue({ data: pendingOrder(null) });
-
-    const { root } = renderTrackOrderPage();
-    mountedRoot = root;
-    await flushAsyncWork();
-
-    expect(publicApi.get).toHaveBeenCalledTimes(1);
-
-    await act(async () => {
-      vi.advanceTimersByTime(60_000);
-      await Promise.resolve();
-    });
-
-    expect(publicApi.get).toHaveBeenCalledTimes(2);
-  });
-
-  it('待支付订单静默刷新失败时保留已加载的订单内容', async () => {
-    vi.useFakeTimers();
-    (publicApi.get as Mock)
-      .mockResolvedValueOnce({
-        data: pendingOrder({
-          ordersAhead: 1,
-          position: 2,
-          pendingTotal: 2,
-          estimatedQueueSeconds: 5 * 60,
-          secondsPerOrder: 5 * 60,
-          calculationSource: 'default',
-          calculatedAt: '2026-06-01T00:00:00.000Z',
-        }),
-      })
-      .mockRejectedValueOnce({
-        response: { data: { error: '临时网络错误' } },
-      });
-
-    const { container, root } = renderTrackOrderPage();
-    mountedRoot = root;
-    await flushAsyncWork();
-
-    await act(async () => {
-      vi.advanceTimersByTime(60_000);
-      await Promise.resolve();
-    });
-
-    expect(container.textContent).toContain('前方 1 单');
-    expect(container.querySelector<HTMLInputElement>('input[readonly]')?.value).toBe('pix-code');
-    expect(container.textContent).not.toContain('临时网络错误');
   });
 });

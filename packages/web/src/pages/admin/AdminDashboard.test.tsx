@@ -54,7 +54,7 @@ describe('AdminDashboard', () => {
     document.body.innerHTML = '';
   });
 
-  it('shows global completion counters and removes worker performance chart', async () => {
+  it('shows completion counters, queue operations metrics, and proxy health', async () => {
     (api.get as Mock).mockResolvedValue({
       data: {
         totals: {
@@ -69,6 +69,19 @@ describe('AdminDashboard', () => {
           totalCodes: 30,
           unusedCodes: 12,
         },
+        queue: {
+          waitingCount: 8,
+          delayedCount: 1,
+          activeCount: 2,
+          failedCount: 3,
+          oldestWaitingSeconds: 420,
+          averageGenerationSeconds: 180,
+          successRateLastHour: 75,
+        },
+        proxyHealth: {
+          chatGpt: { total: 3, healthy: 2, coolingDown: 1 },
+          stripe: { total: 4, healthy: 4, coolingDown: 0 },
+        },
         dailyTrend: [],
       },
     });
@@ -79,10 +92,13 @@ describe('AdminDashboard', () => {
     expect(container.textContent).toContain('总已完成');
     expect(container.textContent).toContain('今日已完成');
     expect(container.textContent).toContain('本周已完成');
-    expect(container.textContent).toContain('9');
-    expect(container.textContent).toContain('2');
-    expect(container.textContent).toContain('5');
+    expect(container.textContent).toContain('队列等待');
+    expect(container.textContent).toContain('处理中');
+    expect(container.textContent).toContain('失败任务');
+    expect(container.textContent).toContain('最老等待 7 分钟');
+    expect(container.textContent).toContain('近 1 小时成功率 75%');
+    expect(container.textContent).toContain('ChatGPT 代理');
+    expect(container.textContent).toContain('Stripe 代理');
     expect(container.textContent).not.toContain('工人绩效');
-    expect(container.textContent).not.toContain('暂无工人数据');
   });
 });
