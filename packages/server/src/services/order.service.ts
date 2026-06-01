@@ -67,6 +67,10 @@ export async function createOrder(redemptionCode: string, session: string) {
         pixQrPng: new Uint8Array(qrPngBuffer),
         pixExpiresAt,
         pixImageUrl: stripeResult.pix.imageUrlPng,
+        setupIntentId: stripeResult.pix.setupIntentId ?? null,
+        setupIntentClientSecret: stripeResult.pix.setupIntentClientSecret
+          ? encrypt(stripeResult.pix.setupIntentClientSecret)
+          : null,
         billingProfileJson: profile as object,
         encryptedSessionData: null,
     } as const;
@@ -347,6 +351,8 @@ export async function getAdminOrders(filters: {
       errorMessage: o.errorMessage,
       completedBy: o.completedBy
         ? { id: o.completedBy.id, displayName: o.completedBy.displayName ?? o.completedBy.username }
+        : o.status === 'PAYMENT_COMPLETED'
+          ? { id: 'auto-payment-detection', displayName: '自动检测' }
         : null,
       completedAt: o.completedAt?.toISOString() ?? null,
       createdAt: o.createdAt.toISOString(),

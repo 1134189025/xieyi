@@ -44,6 +44,10 @@ export const updateProxySettingSchema = z.object({
   proxy: z.string().max(1000).trim().nullable(),
 });
 
+export const updateAutoPaymentDetectionSettingSchema = z.object({
+  enabled: z.boolean(),
+});
+
 export const listOrdersQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(50),

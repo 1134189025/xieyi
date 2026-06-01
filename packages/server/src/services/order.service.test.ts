@@ -17,6 +17,7 @@ const prisma = {
     updateMany: vi.fn(),
     findUnique: vi.fn(),
     findMany: vi.fn(),
+    count: vi.fn(),
   },
 };
 
@@ -26,17 +27,19 @@ const createCheckoutUrl = vi.fn();
 const generatePixPayment = vi.fn();
 const broadcastOrderNew = vi.fn();
 const getConfiguredProxyUrl = vi.fn();
+const encrypt = vi.fn((plaintext: string) => `encrypted:${plaintext}`);
 
 vi.mock('../db.ts', () => ({ prisma }));
 vi.mock('./chatgpt-session.service.ts', () => ({ parseChatGptSessionInput, resolveAccessToken, createCheckoutUrl }));
 vi.mock('./pix-payment.service.ts', () => ({ generatePixPayment }));
 vi.mock('./settings.service.ts', () => ({ getConfiguredProxyUrl }));
+vi.mock('../utils/crypto.ts', () => ({ encrypt }));
 vi.mock('../ws/index.ts', () => ({
   broadcastOrderNew,
   broadcastOrderStatusChange: vi.fn(),
 }));
 
-const { createOrder, completeOrder, getOrderByTrackingToken } = await import('./order.service.ts');
+const { createOrder, completeOrder, getAdminOrders, getOrderByTrackingToken } = await import('./order.service.ts');
 
 describe('order.service', () => {
   beforeEach(() => {
@@ -253,6 +256,9 @@ describe('order.service', () => {
           data: 'pix-code',
           expiresAt: 1781111404,
           imageUrlPng: 'https://stripe.test/pix.png',
+          setupIntentId: 'seti_test_123',
+          setupIntentClientSecret: 'seti_test_123_secret_456',
+          setupIntentStatus: 'requires_action',
         },
       },
       profile: { name: 'Cliente Teste' },
@@ -268,11 +274,14 @@ describe('order.service', () => {
       pixImageUrl: 'https://stripe.test/pix.png',
     });
 
-    await expect(createOrder('ABCD-1234', 'session-token-value')).resolves.toMatchObject({
+    const response = await createOrder('ABCD-1234', 'session-token-value');
+
+    expect(response).toMatchObject({
       trackingToken: 'track-1',
       status: 'PENDING_PAYMENT',
       pixCode: 'pix-code',
     });
+    expect(response).not.toHaveProperty('setupIntentClientSecret');
 
     expect(prisma.$executeRaw).not.toHaveBeenCalled();
     expect(prisma.order.updateMany).toHaveBeenCalledWith({
@@ -280,6 +289,8 @@ describe('order.service', () => {
       data: expect.objectContaining({
         status: 'PENDING_PAYMENT',
         checkoutSessionId: 'cs_test_123',
+        setupIntentId: 'seti_test_123',
+        setupIntentClientSecret: 'encrypted:seti_test_123_secret_456',
       }),
     });
     expect(prisma.order.findUnique).toHaveBeenCalledWith({ where: { id: 'order-1' } });
@@ -464,6 +475,31 @@ describe('order.service', () => {
     await expect(getOrderByTrackingToken('track-1')).resolves.toMatchObject({
       status: 'FAILED',
       errorMessage: '支付创建失败，请稍后重试',
+    });
+  });
+
+  it('后台订单列表把自动完成订单显示为自动检测', async () => {
+    prisma.order.findMany.mockResolvedValue([{
+      id: 'order-1',
+      trackingToken: 'track-1',
+      status: 'PAYMENT_COMPLETED',
+      pixCode: 'pix-code',
+      checkoutSessionId: 'cs_test_123',
+      errorMessage: null,
+      completedBy: null,
+      completedAt: new Date('2026-06-01T00:00:00.000Z'),
+      createdAt: new Date('2026-06-01T00:00:00.000Z'),
+    }]);
+    prisma.order.count.mockResolvedValue(1);
+
+    await expect(getAdminOrders({ page: 1, limit: 50 })).resolves.toMatchObject({
+      orders: [{
+        id: 'order-1',
+        completedBy: {
+          id: 'auto-payment-detection',
+          displayName: '自动检测',
+        },
+      }],
     });
   });
 });

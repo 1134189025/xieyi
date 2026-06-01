@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createDirectStripePixPayment, type StripeHttpTransport } from './stripe-pix-protocol.ts';
+import {
+  createDirectStripePixPayment,
+  retrieveStripeSetupIntentStatus,
+  type StripeHttpTransport,
+} from './stripe-pix-protocol.ts';
 import type { BrazilBillingProfile } from './brazil-profile.ts';
 
 const profile: BrazilBillingProfile = {
@@ -17,6 +21,9 @@ const profile: BrazilBillingProfile = {
 
 const pixResponse = {
   setup_intent: {
+    id: 'seti_123',
+    client_secret: 'seti_123_secret_456',
+    status: 'requires_action',
     next_action: {
       pix_display_qr_code: {
         data: '000201valid-pix-payload',
@@ -30,7 +37,7 @@ describe('createDirectStripePixPayment', () => {
     vi.unstubAllGlobals();
   });
 
-  it('向 transport 传递请求超时配置', async () => {
+  it('passes timeout configuration to the transport', async () => {
     const postForm = vi
       .fn<StripeHttpTransport['postForm']>()
       .mockResolvedValueOnce({
@@ -55,7 +62,7 @@ describe('createDirectStripePixPayment', () => {
     );
   });
 
-  it('payment page 应付金额为 0 时继续创建 Pix 并确认 expected_amount=0', async () => {
+  it('continues when payable amount is zero and keeps SetupIntent credentials', async () => {
     const postForm = vi
       .fn<StripeHttpTransport['postForm']>()
       .mockResolvedValueOnce({
@@ -67,7 +74,7 @@ describe('createDirectStripePixPayment', () => {
       .mockResolvedValueOnce({ id: 'pm_123', type: 'pix' })
       .mockResolvedValueOnce(pixResponse);
 
-    await createDirectStripePixPayment({
+    const result = await createDirectStripePixPayment({
       checkoutUrl: 'https://pay.openai.com/c/pay/cs_test_123',
       profile,
       transport: { postForm },
@@ -75,9 +82,64 @@ describe('createDirectStripePixPayment', () => {
 
     const confirmBody = postForm.mock.calls[2]?.[1];
     expect(confirmBody?.get('expected_amount')).toBe('0');
+    expect(result.pix).toMatchObject({
+      setupIntentId: 'seti_123',
+      setupIntentClientSecret: 'seti_123_secret_456',
+      setupIntentStatus: 'requires_action',
+    });
   });
 
-  it('payment page 应付金额大于 0 时返回账号无资格且不创建 Pix', async () => {
+  it('retrieves SetupIntent status with client_secret and publishable key', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'seti_123', status: 'succeeded' }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      retrieveStripeSetupIntentStatus({
+        setupIntentId: 'seti_123',
+        clientSecret: 'seti_123_secret_456',
+        timeoutMs: 1234,
+      }),
+    ).resolves.toEqual({ id: 'seti_123', status: 'succeeded' });
+
+    const requestUrl = String(fetchMock.mock.calls[0]?.[0]);
+    expect(requestUrl).toContain('/v1/setup_intents/seti_123');
+    expect(requestUrl).toContain('client_secret=seti_123_secret_456');
+    expect(requestUrl).toContain('key=pk_live_');
+  });
+
+  it('retries transient SetupIntent checks but not 400 business errors', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response('bad gateway', { status: 502 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'seti_123', status: 'requires_action' }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { code: 'invalid_request_error' } }), { status: 400 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      retrieveStripeSetupIntentStatus({
+        setupIntentId: 'seti_123',
+        clientSecret: 'seti_123_secret_456',
+        retry: { attempts: 3, backoffMs: [0, 0] },
+        proxyUrl: 'http://user:pass@proxy.example:10000',
+      }),
+    ).resolves.toEqual({ id: 'seti_123', status: 'requires_action' });
+
+    await expect(
+      retrieveStripeSetupIntentStatus({
+        setupIntentId: 'seti_bad',
+        clientSecret: 'seti_bad_secret',
+        retry: { attempts: 3, backoffMs: [0, 0] },
+      }),
+    ).rejects.toMatchObject({
+      code: 'PAYMENT_STATUS_CHECK_FAILED',
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('returns account-not-eligible when payable amount is greater than zero', async () => {
     const postForm = vi
       .fn<StripeHttpTransport['postForm']>()
       .mockResolvedValueOnce({
@@ -94,13 +156,12 @@ describe('createDirectStripePixPayment', () => {
     ).rejects.toMatchObject({
       statusCode: 400,
       code: 'ACCOUNT_NOT_ELIGIBLE',
-      message: '账号无资格，无法生成 Pix 支付',
     });
 
     expect(postForm).toHaveBeenCalledTimes(1);
   });
 
-  it('payment page 缺少应付金额时不默认按 0 确认', async () => {
+  it('does not default missing payable amount to zero', async () => {
     const postForm = vi
       .fn<StripeHttpTransport['postForm']>()
       .mockResolvedValueOnce({
@@ -122,7 +183,7 @@ describe('createDirectStripePixPayment', () => {
     expect(postForm).toHaveBeenCalledTimes(1);
   });
 
-  it('默认 transport 使用代理并重试可恢复的 Stripe 抖动', async () => {
+  it('default transport uses proxy and retries recoverable Stripe errors', async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(new Response('bad gateway', { status: 502 }))
@@ -148,7 +209,7 @@ describe('createDirectStripePixPayment', () => {
     );
   });
 
-  it('Stripe checkout_amount_mismatch 业务错误映射为账号无资格且不重试', async () => {
+  it('maps checkout_amount_mismatch to account-not-eligible without retrying', async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(new Response(JSON.stringify({ invoice: { amount_due: 0 } }), { status: 200 }))

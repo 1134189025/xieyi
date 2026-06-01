@@ -9,6 +9,7 @@ import { errorHandler } from './middleware/error-handler.ts';
 import { setupWebSocket } from './ws/index.ts';
 import { seedAdmin } from './services/auth.service.ts';
 import { expirePendingOrders } from './services/order.service.ts';
+import { detectCompletedPixPayments } from './services/payment-status.service.ts';
 import authRoutes from './routes/auth.routes.ts';
 import orderRoutes from './routes/order.routes.ts';
 import workerRoutes from './routes/worker.routes.ts';
@@ -47,7 +48,11 @@ async function start() {
   await seedAdmin();
 
   setInterval(() => {
-    expirePendingOrders().catch(console.error);
+    detectCompletedPixPayments()
+      .catch(console.error)
+      .finally(() => {
+        expirePendingOrders().catch(console.error);
+      });
   }, 60_000);
 
   httpServer.listen(config.port, () => {

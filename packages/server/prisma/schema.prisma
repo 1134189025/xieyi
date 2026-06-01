@@ -61,6 +61,8 @@ model Order {
   checkoutSessionId    String?     @map("checkout_session_id")
   checkoutUrl          String?     @map("checkout_url")
   paymentMethodId      String?     @map("payment_method_id")
+  setupIntentId        String?     @map("setup_intent_id")
+  setupIntentClientSecret String?  @map("setup_intent_client_secret")
   pixCode              String?     @map("pix_code")
   pixQrPng             Bytes?      @map("pix_qr_png")
   pixExpiresAt         DateTime?   @map("pix_expires_at")
@@ -78,6 +80,7 @@ model Order {
 
   @@index([status])
   @@index([trackingToken])
+  @@index([setupIntentId])
   @@index([createdAt])
   @@map("orders")
 }
