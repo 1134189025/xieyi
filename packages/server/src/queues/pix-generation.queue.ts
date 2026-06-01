@@ -106,7 +106,7 @@ function getRedisConnection(): ConnectionOptions {
 
 function pixGenerationJobOptions(orderId?: string): JobsOptions {
   return {
-    jobId: orderId ? `pix-generation:${orderId}` : undefined,
+    jobId: orderId ? `pix-generation-${orderId}` : undefined,
     attempts: 3,
     backoff: { type: 'exponential', delay: 5000 },
     removeOnComplete: { age: 24 * 60 * 60, count: 1000 },

@@ -401,7 +401,10 @@ function safeQueueEstimateLog(error: unknown): string {
   const name = error instanceof Error ? error.name : 'UnknownError';
   const code = (error as { code?: unknown }).code;
   const codeText = typeof code === 'string' ? ` code=${code}` : '';
-  return `error=${name}${codeText}`;
+  const messageText = error instanceof Error && error.message
+    ? ` message=${error.message.replace(/\s+/g, ' ').slice(0, 160)}`
+    : '';
+  return `error=${name}${codeText}${messageText}`;
 }
 
 export async function completeOrder(orderId: string) {
