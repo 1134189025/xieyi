@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const prisma = {
   $transaction: vi.fn(),
@@ -26,6 +26,8 @@ const resolveAccessToken = vi.fn();
 const createCheckoutUrl = vi.fn();
 const generatePixPayment = vi.fn();
 const broadcastOrderNew = vi.fn();
+const broadcastOrderClaimed = vi.fn();
+const broadcastOrderStatusChange = vi.fn();
 const getConfiguredProxyUrl = vi.fn();
 const encrypt = vi.fn((plaintext: string) => `encrypted:${plaintext}`);
 
@@ -36,25 +38,33 @@ vi.mock('./settings.service.ts', () => ({ getConfiguredProxyUrl }));
 vi.mock('../utils/crypto.ts', () => ({ encrypt }));
 vi.mock('../ws/index.ts', () => ({
   broadcastOrderNew,
-  broadcastOrderStatusChange: vi.fn(),
+  broadcastOrderClaimed,
+  broadcastOrderStatusChange,
 }));
 
 const {
+  claimOrder,
   createOrder,
   completeOrder,
   getAdminOrders,
   getOrderByTrackingToken,
+  getWorkerSummary,
   getWorkerOrders,
 } = await import('./order.service.ts');
 
 describe('order.service', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.useRealTimers();
     parseChatGptSessionInput.mockReturnValue({ kind: 'session_token', sessionToken: 'session-token-value' });
     getConfiguredProxyUrl.mockResolvedValue(null);
     prisma.$executeRaw.mockResolvedValue(1);
     prisma.order.count.mockResolvedValue(0);
     prisma.order.findMany.mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('使用单条 CTE 原子预占兑换码并创建订单，不再用 interactive transaction', async () => {
@@ -508,22 +518,130 @@ describe('order.service', () => {
     expect(resolveAccessToken).not.toHaveBeenCalled();
   });
 
-  it('完成订单使用条件状态更新避免并发覆盖', async () => {
+  it('claimOrder claims an unclaimed pending order and broadcasts the ownership change', async () => {
+    const claimedAt = new Date('2026-06-01T00:00:00.000Z');
+    vi.useFakeTimers();
+    vi.setSystemTime(claimedAt);
+    const claimedOrder = {
+      id: 'order-1',
+      trackingToken: 'track-1',
+      status: 'PENDING_PAYMENT',
+      pixCode: 'pix-code',
+      pixQrPng: Buffer.from('png'),
+      pixExpiresAt: null,
+      pixImageUrl: null,
+      claimedById: 'worker-1',
+      claimedAt,
+      createdAt: new Date('2026-06-01T00:00:00.000Z'),
+    };
+    prisma.order.updateMany.mockResolvedValue({ count: 1 });
+    prisma.order.findUnique.mockResolvedValue(claimedOrder);
+
+    await expect(claimOrder('order-1', 'worker-1')).resolves.toMatchObject({
+      id: 'order-1',
+      claimedById: 'worker-1',
+      isClaimedByCurrentWorker: true,
+    });
+
+    expect(prisma.order.updateMany).toHaveBeenCalledWith({
+      where: { id: 'order-1', status: 'PENDING_PAYMENT', claimedById: null },
+      data: { claimedById: 'worker-1', claimedAt },
+    });
+    expect(broadcastOrderClaimed).toHaveBeenCalledWith(claimedOrder);
+  });
+
+  it('claimOrder is idempotent for the same worker', async () => {
+    const claimedOrder = {
+      id: 'order-1',
+      trackingToken: 'track-1',
+      status: 'PENDING_PAYMENT',
+      pixCode: 'pix-code',
+      pixQrPng: null,
+      pixExpiresAt: null,
+      pixImageUrl: null,
+      claimedById: 'worker-1',
+      claimedAt: new Date('2026-06-01T00:00:00.000Z'),
+      createdAt: new Date('2026-06-01T00:00:00.000Z'),
+    };
     prisma.order.updateMany.mockResolvedValue({ count: 0 });
-    prisma.order.findUnique.mockResolvedValue({ id: 'order-1', status: 'PAYMENT_COMPLETED' });
+    prisma.order.findUnique.mockResolvedValue(claimedOrder);
+
+    await expect(claimOrder('order-1', 'worker-1')).resolves.toMatchObject({
+      id: 'order-1',
+      claimedById: 'worker-1',
+      isClaimedByCurrentWorker: true,
+    });
+
+    expect(broadcastOrderClaimed).not.toHaveBeenCalled();
+  });
+
+  it('claimOrder rejects an order already claimed by another worker', async () => {
+    prisma.order.updateMany.mockResolvedValue({ count: 0 });
+    prisma.order.findUnique.mockResolvedValue({
+      id: 'order-1',
+      status: 'PENDING_PAYMENT',
+      claimedById: 'worker-2',
+    });
+
+    await expect(claimOrder('order-1', 'worker-1')).rejects.toMatchObject({
+      statusCode: 409,
+    });
+
+    expect(broadcastOrderClaimed).not.toHaveBeenCalled();
+  });
+
+  it('completeOrder requires the current worker to claim the order first', async () => {
+    prisma.order.updateMany.mockResolvedValue({ count: 0 });
+    prisma.order.findUnique.mockResolvedValue({
+      id: 'order-1',
+      status: 'PENDING_PAYMENT',
+      claimedById: null,
+    });
 
     await expect(completeOrder('order-1', 'worker-1')).rejects.toMatchObject({
       statusCode: 409,
     });
 
     expect(prisma.order.updateMany).toHaveBeenCalledWith({
-      where: { id: 'order-1', status: 'PENDING_PAYMENT' },
+      where: { id: 'order-1', status: 'PENDING_PAYMENT', claimedById: 'worker-1' },
       data: {
         status: 'PAYMENT_COMPLETED',
         completedById: 'worker-1',
         completedAt: expect.any(Date),
       },
     });
+  });
+
+  it('completeOrder completes a claimed order for the current worker', async () => {
+    const completedAt = new Date('2026-06-01T00:00:00.000Z');
+    vi.useFakeTimers();
+    vi.setSystemTime(completedAt);
+    const completedOrder = {
+      id: 'order-1',
+      trackingToken: 'track-1',
+      status: 'PAYMENT_COMPLETED',
+      completedAt,
+      completedById: 'worker-1',
+      claimedById: 'worker-1',
+    };
+    prisma.order.updateMany.mockResolvedValue({ count: 1 });
+    prisma.order.findUnique.mockResolvedValue(completedOrder);
+
+    await expect(completeOrder('order-1', 'worker-1')).resolves.toEqual({
+      id: 'order-1',
+      status: 'PAYMENT_COMPLETED',
+      completedAt: completedAt.toISOString(),
+    });
+
+    expect(prisma.order.updateMany).toHaveBeenCalledWith({
+      where: { id: 'order-1', status: 'PENDING_PAYMENT', claimedById: 'worker-1' },
+      data: {
+        status: 'PAYMENT_COMPLETED',
+        completedById: 'worker-1',
+        completedAt,
+      },
+    });
+    expect(broadcastOrderStatusChange).toHaveBeenCalledWith(completedOrder);
   });
 
   it('公开追踪接口不暴露内部错误详情', async () => {
@@ -658,18 +776,72 @@ describe('order.service', () => {
     });
   });
 
-  it('工人队列使用和客户排队估算一致的稳定排序', async () => {
-    prisma.order.findMany.mockResolvedValue([]);
-    prisma.order.count.mockResolvedValue(0);
+  it('worker queue returns unclaimed orders and orders claimed by the current worker in stable order', async () => {
+    const unclaimedOrder = {
+      id: 'order-1',
+      trackingToken: 'track-1',
+      status: 'PENDING_PAYMENT',
+      pixCode: 'pix-1',
+      pixQrPng: null,
+      pixExpiresAt: null,
+      pixImageUrl: null,
+      claimedById: null,
+      claimedAt: null,
+      createdAt: new Date('2026-06-01T00:00:00.000Z'),
+    };
+    const claimedOrder = {
+      ...unclaimedOrder,
+      id: 'order-2',
+      trackingToken: 'track-2',
+      pixCode: 'pix-2',
+      claimedById: 'worker-1',
+      claimedAt: new Date('2026-06-01T00:05:00.000Z'),
+      createdAt: new Date('2026-06-01T00:01:00.000Z'),
+    };
+    prisma.order.findMany.mockResolvedValue([unclaimedOrder, claimedOrder]);
+    prisma.order.count.mockResolvedValue(2);
 
-    await getWorkerOrders(1, 20);
+    await expect(getWorkerOrders('worker-1', 1, 20)).resolves.toMatchObject({
+      total: 2,
+      orders: [
+        { id: 'order-1', claimedById: null, isClaimedByCurrentWorker: false },
+        { id: 'order-2', claimedById: 'worker-1', isClaimedByCurrentWorker: true },
+      ],
+    });
+
+    const workerQueueWhere = {
+      status: 'PENDING_PAYMENT',
+      OR: [{ claimedById: null }, { claimedById: 'worker-1' }],
+    };
 
     expect(prisma.order.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { status: 'PENDING_PAYMENT' },
+        where: workerQueueWhere,
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       }),
     );
+    expect(prisma.order.count).toHaveBeenCalledWith({ where: workerQueueWhere });
+  });
+
+  it('worker summary counts only current worker completions in the Asia Shanghai day', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-01T10:30:00.000Z'));
+    prisma.order.count.mockResolvedValue(3);
+
+    await expect(getWorkerSummary('worker-1')).resolves.toEqual({
+      completedToday: 3,
+    });
+
+    expect(prisma.order.count).toHaveBeenCalledWith({
+      where: {
+        status: 'PAYMENT_COMPLETED',
+        completedById: 'worker-1',
+        completedAt: {
+          gte: new Date('2026-05-31T16:00:00.000Z'),
+          lt: new Date('2026-06-01T16:00:00.000Z'),
+        },
+      },
+    });
   });
 
   it('后台订单列表把自动完成订单显示为自动检测', async () => {

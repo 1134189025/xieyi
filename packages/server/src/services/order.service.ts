@@ -1,13 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { nanoid } from 'nanoid';
-import type { Order } from '@prisma/client';
+import type { Order, Prisma } from '@prisma/client';
 import { prisma } from '../db.ts';
 import { AppError } from '../middleware/error-handler.ts';
 import { encrypt } from '../utils/crypto.ts';
 import { parseChatGptSessionInput, resolveAccessToken, createCheckoutUrl } from './chatgpt-session.service.ts';
 import { generatePixPayment } from './pix-payment.service.ts';
 import { getConfiguredProxyUrl } from './settings.service.ts';
-import { broadcastOrderNew, broadcastOrderStatusChange } from '../ws/index.ts';
+import { broadcastOrderClaimed, broadcastOrderNew, broadcastOrderStatusChange } from '../ws/index.ts';
 
 const SAFE_PAYMENT_ERROR_MESSAGE = '支付创建失败，请稍后重试';
 const ORDER_STATE_CHANGED_MESSAGE = '订单状态已变化，请重新提交或联系管理员';
@@ -37,6 +37,11 @@ interface CreatingPaymentOrder {
   pixCode: string | null;
   pixImageUrl: string | null;
 }
+
+type ClaimableOrder = Order & {
+  claimedById: string | null;
+  claimedAt: Date | null;
+};
 
 type QueueCalculationSource = 'recent_completion_cadence' | 'default';
 
@@ -293,31 +298,42 @@ async function buildPublicOrderView(order: Order) {
   };
 }
 
-export async function getWorkerOrders(page: number, limit: number) {
+export async function getWorkerOrders(workerId: string, page: number, limit: number) {
+  const workerQueueWhere: Prisma.OrderWhereInput = {
+    status: 'PENDING_PAYMENT',
+    OR: [{ claimedById: null }, { claimedById: workerId }],
+  };
   const [orders, total] = await Promise.all([
     prisma.order.findMany({
-      where: { status: 'PENDING_PAYMENT' },
+      where: workerQueueWhere,
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       skip: (page - 1) * limit,
       take: limit,
     }),
-    prisma.order.count({ where: { status: 'PENDING_PAYMENT' } }),
+    prisma.order.count({ where: workerQueueWhere }),
   ]);
 
   return {
-    orders: orders.map((o) => ({
-      id: o.id,
-      trackingToken: o.trackingToken,
-      status: o.status,
-      pixCode: o.pixCode,
-      pixQrPngBase64: o.pixQrPng ? Buffer.from(o.pixQrPng).toString('base64') : null,
-      pixExpiresAt: o.pixExpiresAt?.toISOString() ?? null,
-      pixImageUrl: o.pixImageUrl,
-      createdAt: o.createdAt.toISOString(),
-    })),
+    orders: orders.map((order) => buildWorkerOrderView(order as ClaimableOrder, workerId)),
     total,
     page,
     limit,
+  };
+}
+
+function buildWorkerOrderView(order: ClaimableOrder, workerId: string) {
+  return {
+    id: order.id,
+    trackingToken: order.trackingToken,
+    status: order.status,
+    pixCode: order.pixCode,
+    pixQrPngBase64: order.pixQrPng ? Buffer.from(order.pixQrPng).toString('base64') : null,
+    pixExpiresAt: order.pixExpiresAt?.toISOString() ?? null,
+    pixImageUrl: order.pixImageUrl,
+    claimedById: order.claimedById,
+    claimedAt: order.claimedAt?.toISOString() ?? null,
+    isClaimedByCurrentWorker: order.claimedById === workerId,
+    createdAt: order.createdAt.toISOString(),
   };
 }
 
@@ -405,10 +421,36 @@ function safeQueueEstimateLog(error: unknown): string {
   return `error=${name}${codeText}`;
 }
 
+export async function claimOrder(orderId: string, workerId: string) {
+  const claimedAt = new Date();
+  const changed = await prisma.order.updateMany({
+    where: { id: orderId, status: 'PENDING_PAYMENT', claimedById: null },
+    data: { claimedById: workerId, claimedAt },
+  });
+
+  if (changed.count === 1) {
+    const claimedOrder = await prisma.order.findUnique({ where: { id: orderId } });
+    if (!claimedOrder) throw new AppError(404, 'Order not found');
+    broadcastOrderClaimed(claimedOrder);
+    return buildWorkerOrderView(claimedOrder as ClaimableOrder, workerId);
+  }
+
+  const existingOrder = await prisma.order.findUnique({ where: { id: orderId } });
+  if (!existingOrder) throw new AppError(404, 'Order not found');
+  const claimableOrder = existingOrder as ClaimableOrder;
+  if (claimableOrder.status !== 'PENDING_PAYMENT') {
+    throw new AppError(409, `Order is ${claimableOrder.status}, cannot claim`);
+  }
+  if (claimableOrder.claimedById === workerId) {
+    return buildWorkerOrderView(claimableOrder, workerId);
+  }
+  throw new AppError(409, 'Order already claimed');
+}
+
 export async function completeOrder(orderId: string, workerId: string) {
   const completedAt = new Date();
   const changed = await prisma.order.updateMany({
-    where: { id: orderId, status: 'PENDING_PAYMENT' },
+    where: { id: orderId, status: 'PENDING_PAYMENT', claimedById: workerId },
     data: {
       status: 'PAYMENT_COMPLETED',
       completedById: workerId,
@@ -419,7 +461,11 @@ export async function completeOrder(orderId: string, workerId: string) {
   if (changed.count === 0) {
     const order = await prisma.order.findUnique({ where: { id: orderId } });
     if (!order) throw new AppError(404, 'Order not found');
-    throw new AppError(409, `Order is ${order.status}, cannot complete`);
+    const claimableOrder = order as ClaimableOrder;
+    if (claimableOrder.status === 'PENDING_PAYMENT' && claimableOrder.claimedById !== workerId) {
+      throw new AppError(409, 'Order must be claimed by current worker before completion');
+    }
+    throw new AppError(409, `Order is ${claimableOrder.status}, cannot complete`);
   }
 
   const updated = await prisma.order.findUnique({ where: { id: orderId } });
@@ -427,6 +473,34 @@ export async function completeOrder(orderId: string, workerId: string) {
 
   broadcastOrderStatusChange(updated);
   return { id: updated.id, status: updated.status, completedAt: updated.completedAt?.toISOString() };
+}
+
+export async function getWorkerSummary(workerId: string) {
+  const shanghaiDayRange = getShanghaiDayRange(new Date());
+  const completedToday = await prisma.order.count({
+    where: {
+      status: 'PAYMENT_COMPLETED',
+      completedById: workerId,
+      completedAt: {
+        gte: shanghaiDayRange.start,
+        lt: shanghaiDayRange.end,
+      },
+    },
+  });
+
+  return { completedToday };
+}
+
+function getShanghaiDayRange(now: Date) {
+  const shanghaiOffsetMs = 8 * 60 * 60 * 1000;
+  const shanghaiNow = new Date(now.getTime() + shanghaiOffsetMs);
+  const start = new Date(Date.UTC(
+    shanghaiNow.getUTCFullYear(),
+    shanghaiNow.getUTCMonth(),
+    shanghaiNow.getUTCDate(),
+  ) - shanghaiOffsetMs);
+  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+  return { start, end };
 }
 
 export async function getAdminOrders(filters: {

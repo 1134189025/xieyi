@@ -7,6 +7,10 @@ import { getAutoPaymentDetectionSetting, getConfiguredProxyUrl } from './setting
 
 const PAYMENT_STATUS_CHECK_LIMIT = 50;
 
+type DetectableOrder = Order & {
+  claimedById: string | null;
+};
+
 export interface PixPaymentDetectionResult {
   checked: number;
   completed: number;
@@ -55,7 +59,7 @@ async function runPixPaymentDetection(): Promise<PixPaymentDetectionResult> {
   return { checked: orders.length, completed, disabled: false, skipped: false };
 }
 
-async function detectSingleOrderPayment(order: Order, proxyUrl: string | null): Promise<boolean> {
+async function detectSingleOrderPayment(order: DetectableOrder, proxyUrl: string | null): Promise<boolean> {
   if (!order.setupIntentId || !order.setupIntentClientSecret) return false;
 
   try {
@@ -80,7 +84,7 @@ async function detectSingleOrderPayment(order: Order, proxyUrl: string | null): 
       where: { id: order.id, status: 'PENDING_PAYMENT' },
       data: {
         status: 'PAYMENT_COMPLETED',
-        completedById: null,
+        completedById: order.claimedById ?? null,
         completedAt,
       },
     });
