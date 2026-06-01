@@ -41,11 +41,11 @@
 
 @layer components {
   .checkout-shell {
-    min-height: 100vh;
+    min-height: 100svh;
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 1rem;
+    padding: 0.75rem;
     background:
       radial-gradient(circle at 18% 0%, rgba(255, 255, 255, 0.95), transparent 18rem),
       linear-gradient(140deg, var(--bg-body), #eef1f5);
@@ -62,7 +62,7 @@
   }
 
   .checkout-content {
-    padding: 2rem;
+    padding: 1.25rem;
   }
 
   .checkout-brand-row {
@@ -151,6 +151,7 @@
     font-size: 0.75rem;
     line-height: 1.55;
     resize: vertical;
+    word-break: break-word;
   }
 
   .checkout-input:focus,
@@ -331,15 +332,17 @@
 
   .pix-qr-shell {
     margin: 1.5rem auto 1.125rem;
+    max-width: 100%;
     border: 1px solid var(--border-light);
     border-radius: 22px;
     background: #fbfcfd;
-    padding: 1rem;
+    padding: 0.75rem;
   }
 
   .pix-qr-image {
-    width: 214px;
-    height: 214px;
+    width: min(214px, 100%);
+    height: auto;
+    aspect-ratio: 1;
     display: block;
     margin: 0 auto;
     border-radius: 16px;
@@ -374,6 +377,22 @@
 
   .checkout-icon-button:hover {
     background: var(--accent-hover);
+  }
+}
+
+@media (min-width: 640px) {
+  @layer components {
+    .checkout-shell {
+      padding: 1rem;
+    }
+
+    .checkout-content {
+      padding: 2rem;
+    }
+
+    .pix-qr-shell {
+      padding: 1rem;
+    }
   }
 }
 
