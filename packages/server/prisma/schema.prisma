@@ -33,6 +33,7 @@ model User {
 
   createdCodes    RedemptionCode[] @relation("CreatedBy")
   completedOrders Order[]          @relation("CompletedBy")
+  claimedOrders   Order[]          @relation("ClaimedBy")
 
   @@map("users")
 }
@@ -70,17 +71,23 @@ model Order {
   billingProfileJson   Json?       @map("billing_profile_json")
   encryptedSessionData String?     @map("encrypted_session_data")
   errorMessage         String?     @map("error_message")
+  claimedById          String?     @map("claimed_by_id")
+  claimedAt            DateTime?   @map("claimed_at")
   completedById        String?     @map("completed_by_id")
   completedAt          DateTime?   @map("completed_at")
   createdAt            DateTime    @default(now()) @map("created_at")
   updatedAt            DateTime    @updatedAt @map("updated_at")
 
   redemptionCode RedemptionCode @relation(fields: [redemptionCodeId], references: [id])
+  claimedBy      User?          @relation("ClaimedBy", fields: [claimedById], references: [id], onDelete: SetNull)
   completedBy    User?          @relation("CompletedBy", fields: [completedById], references: [id])
 
   @@index([status])
   @@index([trackingToken])
   @@index([setupIntentId])
+  @@index([claimedById])
+  @@index([status, claimedById, createdAt])
+  @@index([completedById, completedAt])
   @@index([createdAt])
   @@map("orders")
 }
