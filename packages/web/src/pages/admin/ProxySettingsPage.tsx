@@ -13,7 +13,11 @@ interface ProxySetting {
   maskedProxy: string | null;
 }
 
-const EMPTY_SETTING: ProxySetting = {
+interface AutoPaymentDetectionSetting {
+  enabled: boolean;
+}
+
+const EMPTY_PROXY_SETTING: ProxySetting = {
   enabled: false,
   host: null,
   port: null,
@@ -22,59 +26,82 @@ const EMPTY_SETTING: ProxySetting = {
 };
 
 export default function ProxySettingsPage() {
-  const [setting, setSetting] = useState<ProxySetting>(EMPTY_SETTING);
+  const [proxySetting, setProxySetting] = useState<ProxySetting>(EMPTY_PROXY_SETTING);
+  const [autoDetection, setAutoDetection] = useState<AutoPaymentDetectionSetting>({ enabled: true });
   const [proxy, setProxy] = useState('');
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [savingProxy, setSavingProxy] = useState(false);
+  const [savingAutoDetection, setSavingAutoDetection] = useState(false);
   const [error, setError] = useState('');
 
-  const fetchSetting = async () => {
+  const fetchSettings = async () => {
     setLoading(true);
     try {
-      const res = await api.get('/admin/settings/proxy');
-      setSetting(res.data);
+      const [proxyResponse, autoDetectionResponse] = await Promise.all([
+        api.get('/admin/settings/proxy'),
+        api.get('/admin/settings/auto-payment-detection'),
+      ]);
+      setProxySetting(proxyResponse.data);
+      setAutoDetection(autoDetectionResponse.data);
       setError('');
     } catch {
-      setError('代理设置加载失败');
+      setError('系统设置加载失败');
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchSetting();
+    fetchSettings();
   }, []);
 
   const saveProxy = async (nextProxy: string | null) => {
-    setSaving(true);
+    setSavingProxy(true);
     try {
-      const res = await api.put('/admin/settings/proxy', { proxy: nextProxy });
-      setSetting(res.data);
+      const response = await api.put('/admin/settings/proxy', { proxy: nextProxy });
+      setProxySetting(response.data);
       setProxy('');
       toast.success(nextProxy ? '代理设置已保存' : '代理设置已清空');
     } catch (err: unknown) {
       toast.error(safeErrorMessage(err, '保存代理设置失败'));
     } finally {
-      setSaving(false);
+      setSavingProxy(false);
     }
   };
 
-  const handleSubmit = (event: React.FormEvent) => {
+  const saveAutoDetection = async (enabled: boolean) => {
+    setSavingAutoDetection(true);
+    try {
+      const response = await api.put('/admin/settings/auto-payment-detection', { enabled });
+      setAutoDetection(response.data);
+      toast.success(enabled ? '自动检测支付完成已开启' : '自动检测支付完成已关闭');
+    } catch (err: unknown) {
+      toast.error(safeErrorMessage(err, '保存自动检测设置失败'));
+    } finally {
+      setSavingAutoDetection(false);
+    }
+  };
+
+  const handleProxySubmit = (event: React.FormEvent) => {
     event.preventDefault();
     saveProxy(proxy.trim() || null);
   };
 
-  const handleClear = () => {
+  const handleClearProxy = () => {
     if (!confirm('确认清空代理设置？清空后 ChatGPT 和 Stripe 将直连。')) return;
     saveProxy(null);
+  };
+
+  const handleAutoDetectionToggle = () => {
+    saveAutoDetection(!autoDetection.enabled);
   };
 
   return (
     <Layout>
       <div className="mb-6">
-        <h2 className="text-2xl font-bold text-app-primary">代理设置</h2>
+        <h2 className="text-2xl font-bold text-app-primary">系统设置</h2>
         <p className="mt-1 text-sm text-app-secondary">
-          这里配置的 HTTP/HTTPS 代理会同时用于 ChatGPT 结算长链接和 Stripe Pix 协议请求。
+          管理全局代理和 Pix 支付完成自动检测。代理会同时用于 ChatGPT 长链接生成和 Stripe Pix 协议请求。
         </p>
       </div>
 
@@ -83,12 +110,14 @@ export default function ProxySettingsPage() {
           <Loader2 className="h-8 w-8 animate-spin text-app-accent" />
         </div>
       ) : error ? (
-        <div className="rounded-xl border border-app-border bg-app-surface p-10 text-center text-app-secondary shadow-checkout">{error}</div>
+        <div className="rounded-xl border border-app-border bg-app-surface p-10 text-center text-app-secondary shadow-checkout">
+          {error}
+        </div>
       ) : (
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
           <div className="rounded-xl border border-app-border bg-app-surface p-6 shadow-checkout xl:col-span-2">
-            <h3 className="text-lg font-semibold mb-4">全局代理</h3>
-            <form onSubmit={handleSubmit} className="space-y-4">
+            <h3 className="mb-4 text-lg font-semibold">全局代理</h3>
+            <form onSubmit={handleProxySubmit} className="space-y-4">
               <div>
                 <label className="mb-1 block text-sm text-app-secondary">代理地址</label>
                 <input
@@ -108,16 +137,16 @@ export default function ProxySettingsPage() {
               <div className="flex flex-wrap gap-3">
                 <button
                   type="submit"
-                  disabled={saving}
+                  disabled={savingProxy}
                   className="flex items-center gap-2 rounded-lg bg-app-accent px-4 py-2 text-white hover:bg-app-accentHover disabled:opacity-50"
                 >
-                  {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                  {savingProxy ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
                   保存代理
                 </button>
                 <button
                   type="button"
-                  onClick={handleClear}
-                  disabled={saving || !setting.enabled}
+                  onClick={handleClearProxy}
+                  disabled={savingProxy || !proxySetting.enabled}
                   className="flex items-center gap-2 rounded-lg bg-neutral-100 px-4 py-2 text-app-primary hover:bg-neutral-200 disabled:opacity-50"
                 >
                   <Trash2 size={16} />
@@ -128,32 +157,54 @@ export default function ProxySettingsPage() {
           </div>
 
           <div className="rounded-xl border border-app-border bg-app-surface p-6 shadow-checkout">
-            <h3 className="text-lg font-semibold mb-4">当前状态</h3>
+            <h3 className="mb-4 text-lg font-semibold">代理状态</h3>
             <div className="space-y-3 text-sm">
               <div className="flex justify-between gap-4">
                 <span className="text-app-secondary">状态</span>
-                <span className={setting.enabled ? 'text-green-600 font-medium' : 'text-app-secondary'}>
-                  {setting.enabled ? '已启用' : '未启用'}
+                <span className={proxySetting.enabled ? 'font-medium text-green-600' : 'text-app-secondary'}>
+                  {proxySetting.enabled ? '已启用' : '未启用'}
                 </span>
               </div>
               <div className="flex justify-between gap-4">
                 <span className="text-app-secondary">Host</span>
-                <span className="font-mono text-right break-all">{setting.host ?? '-'}</span>
+                <span className="break-all text-right font-mono">{proxySetting.host ?? '-'}</span>
               </div>
               <div className="flex justify-between gap-4">
                 <span className="text-app-secondary">端口</span>
-                <span>{setting.port ?? '-'}</span>
+                <span>{proxySetting.port ?? '-'}</span>
               </div>
               <div className="flex justify-between gap-4">
                 <span className="text-app-secondary">用户名</span>
-                <span className="font-mono text-right break-all">{setting.username ?? '-'}</span>
+                <span className="break-all text-right font-mono">{proxySetting.username ?? '-'}</span>
               </div>
               <div>
                 <span className="mb-1 block text-app-secondary">脱敏代理</span>
                 <span className="block break-all rounded-lg bg-neutral-50 p-3 font-mono text-xs">
-                  {setting.maskedProxy ?? '未配置'}
+                  {proxySetting.maskedProxy ?? '未配置'}
                 </span>
               </div>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-app-border bg-app-surface p-6 shadow-checkout xl:col-span-3">
+            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+              <div>
+                <h3 className="text-lg font-semibold">自动检测支付完成</h3>
+                <p className="mt-1 text-sm text-app-secondary">
+                  开启后，后端会定时查询 Stripe SetupIntent 状态；检测到 succeeded 后自动把订单标记为已完成。
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleAutoDetectionToggle}
+                disabled={savingAutoDetection}
+                className={`flex min-w-32 items-center justify-center gap-2 rounded-lg px-4 py-2 font-medium text-white disabled:opacity-50 ${
+                  autoDetection.enabled ? 'bg-green-600 hover:bg-green-700' : 'bg-neutral-500 hover:bg-neutral-600'
+                }`}
+              >
+                {savingAutoDetection && <Loader2 size={16} className="animate-spin" />}
+                {autoDetection.enabled ? '已开启' : '已关闭'}
+              </button>
             </div>
           </div>
         </div>

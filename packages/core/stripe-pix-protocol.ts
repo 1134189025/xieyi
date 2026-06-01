@@ -62,6 +62,7 @@ export interface PixQrArtifact {
   imageUrlPng?: string;
   expiresAt?: number;
   setupIntentId?: string;
+  setupIntentClientSecret?: string;
   setupIntentStatus?: string;
 }
 
@@ -93,6 +94,20 @@ export interface CreateStripePixPaymentResult {
   paymentMethodId: string;
   pix: PixQrArtifact;
   checkoutConfigId?: string;
+}
+
+export interface RetrieveStripeSetupIntentStatusInput {
+  setupIntentId: string;
+  clientSecret: string;
+  timeoutMs?: number;
+  proxyUrl?: string;
+  retry?: StripeRetryOptions;
+  stripePublishableKey?: string;
+}
+
+export interface StripeSetupIntentStatusResult {
+  id: string;
+  status: string;
 }
 
 export interface StripeHttpTransport {
@@ -206,6 +221,7 @@ export function extractPixQrArtifact(response: unknown): PixQrArtifact {
     imageUrlPng: optionalString(qrCode.image_url_png),
     expiresAt: optionalNumber(qrCode.expires_at),
     setupIntentId: optionalString(setupIntent.id),
+    setupIntentClientSecret: optionalString(setupIntent.client_secret),
     setupIntentStatus: optionalString(setupIntent.status),
   };
 }
@@ -311,6 +327,28 @@ export function urlSearchParamsToObject(params: URLSearchParams): Record<string,
   return Object.fromEntries(params.entries());
 }
 
+export async function retrieveStripeSetupIntentStatus(
+  input: RetrieveStripeSetupIntentStatusInput,
+): Promise<StripeSetupIntentStatusResult> {
+  const query = new URLSearchParams({
+    client_secret: input.clientSecret,
+    key: input.stripePublishableKey ?? DEFAULT_STRIPE_PUBLISHABLE_KEY,
+  });
+  const url = `https://api.stripe.com/v1/setup_intents/${encodeURIComponent(input.setupIntentId)}?${query}`;
+  const response = await fetchStripeJsonWithRetry(url, {
+    timeoutMs: input.timeoutMs ?? 30_000,
+    proxyUrl: input.proxyUrl,
+    retry: input.retry,
+  });
+  const record = asRecord(response);
+  const id = optionalString(record.id);
+  const status = optionalString(record.status);
+  if (!id || !status) {
+    throw new StripePixProtocolError(502, '支付状态查询失败，请稍后重试', 'PAYMENT_STATUS_CHECK_FAILED');
+  }
+  return { id, status };
+}
+
 function appendRuntimeFields(
   body: URLSearchParams,
   identifiers: StripeRuntimeIdentifiers,
@@ -407,6 +445,12 @@ interface FetchStripeHttpTransportOptions {
 
 type RequestInitWithDispatcher = RequestInit & { dispatcher?: unknown };
 
+interface FetchStripeJsonOptions {
+  timeoutMs: number;
+  proxyUrl?: string;
+  retry?: StripeRetryOptions;
+}
+
 class FetchStripeHttpTransport implements StripeHttpTransport {
   private readonly proxyAgent: ProxyAgent | null;
   private readonly retry: Required<StripeRetryOptions>;
@@ -467,6 +511,55 @@ class FetchStripeHttpTransport implements StripeHttpTransport {
 
     throw lastError instanceof Error ? lastError : new Error('Stripe request failed');
   }
+}
+
+async function fetchStripeJsonWithRetry(url: string, options: FetchStripeJsonOptions): Promise<unknown> {
+  const proxyAgent = options.proxyUrl ? new ProxyAgent(options.proxyUrl) : null;
+  const retry = {
+    attempts: Math.max(1, options.retry?.attempts ?? 1),
+    backoffMs: options.retry?.backoffMs ?? [500, 1500, 3000],
+  };
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= retry.attempts; attempt += 1) {
+    try {
+      const response = await fetchWithTimeout(
+        url,
+        {
+          method: 'GET',
+          headers: {
+            'user-agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36',
+          },
+        },
+        options.timeoutMs,
+        proxyAgent,
+      );
+
+      if (!response.ok && isRetryableHttpStatus(response.status) && attempt < retry.attempts) {
+        await response.text().catch(() => '');
+        logRetry('Stripe', url, attempt, retry.attempts, proxyAgent !== null, response.status);
+        await delay(retry.backoffMs[attempt - 1] ?? retry.backoffMs.at(-1) ?? 0);
+        continue;
+      }
+
+      if (!response.ok) {
+        await response.text().catch(() => '');
+        throw new StripePixProtocolError(502, '支付状态查询失败，请稍后重试', 'PAYMENT_STATUS_CHECK_FAILED');
+      }
+
+      return JSON.parse(await response.text()) as unknown;
+    } catch (error) {
+      lastError = normalizeFetchError(error);
+      if (!isRetryableFetchError(lastError) || attempt >= retry.attempts) {
+        throw lastError;
+      }
+      logRetry('Stripe', url, attempt, retry.attempts, proxyAgent !== null);
+      await delay(retry.backoffMs[attempt - 1] ?? retry.backoffMs.at(-1) ?? 0);
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error('Stripe status request failed');
 }
 
 async function fetchWithTimeout(

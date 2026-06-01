@@ -4,12 +4,18 @@ import { batchCreateCodes, listCodes, deleteCode } from '../services/redemption-
 import { createWorker, listWorkers, updateWorker, deleteWorker } from '../services/worker.service.ts';
 import { getAdminOrders, cancelOrder } from '../services/order.service.ts';
 import { getDashboardStats } from '../services/dashboard.service.ts';
-import { getProxySetting, updateProxySetting } from '../services/settings.service.ts';
+import {
+  getAutoPaymentDetectionSetting,
+  getProxySetting,
+  updateAutoPaymentDetectionSetting,
+  updateProxySetting,
+} from '../services/settings.service.ts';
 import {
   batchCodesSchema,
   createWorkerSchema,
   updateWorkerSchema,
   updateOrderSchema,
+  updateAutoPaymentDetectionSettingSchema,
   updateProxySettingSchema,
   listOrdersQuerySchema,
 } from '../utils/validators.ts';
@@ -146,6 +152,25 @@ router.put('/settings/proxy', async (req, res, next) => {
     if (!parsed.success) throw new AppError(400, 'Invalid input');
 
     res.json(await updateProxySetting(parsed.data.proxy));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/settings/auto-payment-detection', async (_req, res, next) => {
+  try {
+    res.json(await getAutoPaymentDetectionSetting());
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.put('/settings/auto-payment-detection', async (req, res, next) => {
+  try {
+    const parsed = updateAutoPaymentDetectionSettingSchema.safeParse(req.body);
+    if (!parsed.success) throw new AppError(400, 'Invalid input');
+
+    res.json(await updateAutoPaymentDetectionSetting(parsed.data.enabled));
   } catch (error) {
     next(error);
   }

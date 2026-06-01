@@ -3,6 +3,7 @@ import { AppError } from '../middleware/error-handler.ts';
 import { decrypt, encrypt } from '../utils/crypto.ts';
 
 const PROXY_SETTING_KEY = 'http_proxy';
+const AUTO_PAYMENT_DETECTION_SETTING_KEY = 'auto_payment_detection_enabled';
 
 export interface ProxySettingView {
   enabled: boolean;
@@ -10,6 +11,10 @@ export interface ProxySettingView {
   port: number | null;
   username: string | null;
   maskedProxy: string | null;
+}
+
+export interface AutoPaymentDetectionSettingView {
+  enabled: boolean;
 }
 
 export interface NormalizedProxyInput {
@@ -65,6 +70,20 @@ export async function updateProxySetting(proxy: string | null): Promise<ProxySet
   });
 
   return toProxySettingView(normalized.proxyUrl);
+}
+
+export async function getAutoPaymentDetectionSetting(): Promise<AutoPaymentDetectionSettingView> {
+  const setting = await prisma.systemSetting.findUnique({ where: { key: AUTO_PAYMENT_DETECTION_SETTING_KEY } });
+  return { enabled: setting?.value !== 'false' };
+}
+
+export async function updateAutoPaymentDetectionSetting(enabled: boolean): Promise<AutoPaymentDetectionSettingView> {
+  await prisma.systemSetting.upsert({
+    where: { key: AUTO_PAYMENT_DETECTION_SETTING_KEY },
+    create: { key: AUTO_PAYMENT_DETECTION_SETTING_KEY, value: String(enabled) },
+    update: { value: String(enabled) },
+  });
+  return { enabled };
 }
 
 function isValidProxyHost(host: string): boolean {

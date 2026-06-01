@@ -15,9 +15,11 @@ vi.mock('../db.ts', () => ({ prisma }));
 vi.mock('../utils/crypto.ts', () => ({ encrypt, decrypt }));
 
 const {
+  getAutoPaymentDetectionSetting,
   getConfiguredProxyUrl,
   getProxySetting,
   normalizeProxyInput,
+  updateAutoPaymentDetectionSetting,
   updateProxySetting,
 } = await import('./settings.service.ts');
 
@@ -99,6 +101,23 @@ describe('settings.service', () => {
     await expect(getConfiguredProxyUrl()).resolves.toBe('http://user:secret@proxy.example:10000');
     await expect(getProxySetting()).resolves.toMatchObject({
       maskedProxy: 'http://user:****@proxy.example:10000',
+    });
+  });
+  it('自动检测支付完成开关默认启用', async () => {
+    prisma.systemSetting.findUnique.mockResolvedValue(null);
+
+    await expect(getAutoPaymentDetectionSetting()).resolves.toEqual({ enabled: true });
+  });
+
+  it('保存自动检测支付完成开关', async () => {
+    prisma.systemSetting.upsert.mockResolvedValue({});
+
+    await expect(updateAutoPaymentDetectionSetting(false)).resolves.toEqual({ enabled: false });
+
+    expect(prisma.systemSetting.upsert).toHaveBeenCalledWith({
+      where: { key: 'auto_payment_detection_enabled' },
+      create: { key: 'auto_payment_detection_enabled', value: 'false' },
+      update: { value: 'false' },
     });
   });
 });
