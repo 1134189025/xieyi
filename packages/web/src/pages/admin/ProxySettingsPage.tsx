@@ -1,48 +1,63 @@
 import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Loader2, Save, Trash2 } from 'lucide-react';
+import { Loader2, Save } from 'lucide-react';
 import api from '../../api/client';
 import Layout from '../../components/Layout';
 import { safeErrorMessage } from '../../utils/labels';
 
-interface ProxySetting {
-  enabled: boolean;
-  host: string | null;
-  port: number | null;
-  username: string | null;
-  maskedProxy: string | null;
+interface ProxySettings {
+  chatGpt: ProxyPoolSetting;
+  stripe: ProxyPoolSetting;
 }
 
-interface AutoPaymentDetectionSetting {
+interface ProxyPoolSetting {
+  enabled: boolean;
+  proxies: ProxyView[];
+}
+
+interface ProxyView {
+  id: string;
+  host: string;
+  port: number;
+  username: string;
+  maskedProxy: string;
+  consecutiveFailures?: number;
+  coolingDownUntil?: string | null;
+  healthy?: boolean;
+}
+
+interface ToggleSetting {
   enabled: boolean;
 }
 
-const EMPTY_PROXY_SETTING: ProxySetting = {
-  enabled: false,
-  host: null,
-  port: null,
-  username: null,
-  maskedProxy: null,
+const EMPTY_PROXY_SETTINGS: ProxySettings = {
+  chatGpt: { enabled: false, proxies: [] },
+  stripe: { enabled: false, proxies: [] },
 };
 
 export default function ProxySettingsPage() {
-  const [proxySetting, setProxySetting] = useState<ProxySetting>(EMPTY_PROXY_SETTING);
-  const [autoDetection, setAutoDetection] = useState<AutoPaymentDetectionSetting>({ enabled: true });
-  const [proxy, setProxy] = useState('');
+  const [proxySettings, setProxySettings] = useState<ProxySettings>(EMPTY_PROXY_SETTINGS);
+  const [autoDetection, setAutoDetection] = useState<ToggleSetting>({ enabled: true });
+  const [maintenanceMode, setMaintenanceMode] = useState<ToggleSetting>({ enabled: false });
+  const [chatGptProxyPool, setChatGptProxyPool] = useState('');
+  const [stripeProxyPool, setStripeProxyPool] = useState('');
   const [loading, setLoading] = useState(true);
   const [savingProxy, setSavingProxy] = useState(false);
   const [savingAutoDetection, setSavingAutoDetection] = useState(false);
+  const [savingMaintenance, setSavingMaintenance] = useState(false);
   const [error, setError] = useState('');
 
   const fetchSettings = async () => {
     setLoading(true);
     try {
-      const [proxyResponse, autoDetectionResponse] = await Promise.all([
+      const [proxyResponse, autoDetectionResponse, maintenanceResponse] = await Promise.all([
         api.get('/admin/settings/proxy'),
         api.get('/admin/settings/auto-payment-detection'),
+        api.get('/admin/settings/maintenance-mode'),
       ]);
-      setProxySetting(proxyResponse.data);
+      setProxySettings(proxyResponse.data);
       setAutoDetection(autoDetectionResponse.data);
+      setMaintenanceMode(maintenanceResponse.data);
       setError('');
     } catch {
       setError('系统设置加载失败');
@@ -52,18 +67,23 @@ export default function ProxySettingsPage() {
   };
 
   useEffect(() => {
-    fetchSettings();
+    void fetchSettings();
   }, []);
 
-  const saveProxy = async (nextProxy: string | null) => {
+  const saveProxyPools = async (event: React.FormEvent) => {
+    event.preventDefault();
     setSavingProxy(true);
     try {
-      const response = await api.put('/admin/settings/proxy', { proxy: nextProxy });
-      setProxySetting(response.data);
-      setProxy('');
-      toast.success(nextProxy ? '代理设置已保存' : '代理设置已清空');
+      const response = await api.put('/admin/settings/proxy', {
+        chatGptProxyPool: chatGptProxyPool.trim(),
+        stripeProxyPool: stripeProxyPool.trim(),
+      });
+      setProxySettings(response.data);
+      setChatGptProxyPool('');
+      setStripeProxyPool('');
+      toast.success('代理池设置已保存');
     } catch (err: unknown) {
-      toast.error(safeErrorMessage(err, '保存代理设置失败'));
+      toast.error(safeErrorMessage(err, '保存代理池失败'));
     } finally {
       setSavingProxy(false);
     }
@@ -82,18 +102,17 @@ export default function ProxySettingsPage() {
     }
   };
 
-  const handleProxySubmit = (event: React.FormEvent) => {
-    event.preventDefault();
-    saveProxy(proxy.trim() || null);
-  };
-
-  const handleClearProxy = () => {
-    if (!confirm('确认清空代理设置？清空后 ChatGPT 和 Stripe 将直连。')) return;
-    saveProxy(null);
-  };
-
-  const handleAutoDetectionToggle = () => {
-    saveAutoDetection(!autoDetection.enabled);
+  const saveMaintenanceMode = async (enabled: boolean) => {
+    setSavingMaintenance(true);
+    try {
+      const response = await api.put('/admin/settings/maintenance-mode', { enabled });
+      setMaintenanceMode(response.data);
+      toast.success(enabled ? '维护模式已开启' : '维护模式已关闭');
+    } catch (err: unknown) {
+      toast.error(safeErrorMessage(err, '保存维护模式失败'));
+    } finally {
+      setSavingMaintenance(false);
+    }
   };
 
   return (
@@ -101,7 +120,7 @@ export default function ProxySettingsPage() {
       <div className="mb-6">
         <h2 className="text-2xl font-bold text-app-primary">系统设置</h2>
         <p className="mt-1 text-sm text-app-secondary">
-          管理全局代理和 Pix 支付完成自动检测。代理会同时用于 ChatGPT 长链接生成和 Stripe Pix 协议请求。
+          分别维护 ChatGPT 和 Stripe 代理池；高峰期订单会排队，只有维护模式会拒绝新订单。
         </p>
       </div>
 
@@ -115,100 +134,141 @@ export default function ProxySettingsPage() {
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
-          <div className="rounded-xl border border-app-border bg-app-surface p-4 shadow-checkout sm:p-6 xl:col-span-2">
-            <h3 className="mb-4 text-lg font-semibold">全局代理</h3>
-            <form onSubmit={handleProxySubmit} className="space-y-4">
-              <div>
-                <label className="mb-1 block text-sm text-app-secondary">代理地址</label>
-                <input
-                  type="text"
-                  value={proxy}
-                  onChange={(event) => setProxy(event.target.value)}
-                  placeholder="host:port:username:password"
-                  autoComplete="off"
-                  spellCheck={false}
-                  className="w-full rounded-lg border border-app-border px-3 py-2 font-mono text-sm outline-none focus:border-app-accent"
-                />
-                <p className="mt-2 break-all text-xs text-app-secondary">
-                  示例：proxy.example:10000:proxy-user-zone-custom-region-JP-session-demo-sessTime-5-sessAuto-1:proxy-pass
-                </p>
-              </div>
+          <form onSubmit={saveProxyPools} className="rounded-xl border border-app-border bg-app-surface p-4 shadow-checkout sm:p-6 xl:col-span-2">
+            <h3 className="mb-4 text-lg font-semibold">代理池</h3>
+            <ProxyPoolTextarea
+              title="ChatGPT 代理池"
+              value={chatGptProxyPool}
+              onChange={setChatGptProxyPool}
+            />
+            <ProxyPoolTextarea
+              title="Stripe 代理池"
+              value={stripeProxyPool}
+              onChange={setStripeProxyPool}
+            />
+            <button
+              type="submit"
+              disabled={savingProxy}
+              className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-app-accent px-4 py-2 text-white hover:bg-app-accentHover disabled:opacity-50 sm:w-auto"
+            >
+              {savingProxy ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+              保存代理池
+            </button>
+          </form>
 
-              <div className="flex flex-wrap gap-3">
-                <button
-                  type="submit"
-                  disabled={savingProxy}
-                  className="flex w-full items-center justify-center gap-2 rounded-lg bg-app-accent px-4 py-2 text-white hover:bg-app-accentHover disabled:opacity-50 sm:w-auto"
-                >
-                  {savingProxy ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-                  保存代理
-                </button>
-                <button
-                  type="button"
-                  onClick={handleClearProxy}
-                  disabled={savingProxy || !proxySetting.enabled}
-                  className="flex w-full items-center justify-center gap-2 rounded-lg bg-neutral-100 px-4 py-2 text-app-primary hover:bg-neutral-200 disabled:opacity-50 sm:w-auto"
-                >
-                  <Trash2 size={16} />
-                  清空代理
-                </button>
-              </div>
-            </form>
+          <div className="space-y-6">
+            <ProxyPoolStatus title="ChatGPT 代理池" setting={proxySettings.chatGpt} />
+            <ProxyPoolStatus title="Stripe 代理池" setting={proxySettings.stripe} />
           </div>
 
-          <div className="rounded-xl border border-app-border bg-app-surface p-4 shadow-checkout sm:p-6">
-            <h3 className="mb-4 text-lg font-semibold">代理状态</h3>
-            <div className="space-y-3 text-sm">
-              <div className="flex justify-between gap-4">
-                <span className="text-app-secondary">状态</span>
-                <span className={proxySetting.enabled ? 'font-medium text-green-600' : 'text-app-secondary'}>
-                  {proxySetting.enabled ? '已启用' : '未启用'}
-                </span>
-              </div>
-              <div className="flex justify-between gap-4">
-                <span className="text-app-secondary">Host</span>
-                <span className="break-all text-right font-mono">{proxySetting.host ?? '-'}</span>
-              </div>
-              <div className="flex justify-between gap-4">
-                <span className="text-app-secondary">端口</span>
-                <span>{proxySetting.port ?? '-'}</span>
-              </div>
-              <div className="flex justify-between gap-4">
-                <span className="text-app-secondary">用户名</span>
-                <span className="break-all text-right font-mono">{proxySetting.username ?? '-'}</span>
-              </div>
-              <div>
-                <span className="mb-1 block text-app-secondary">脱敏代理</span>
-                <span className="block break-all rounded-lg bg-neutral-50 p-3 font-mono text-xs">
-                  {proxySetting.maskedProxy ?? '未配置'}
-                </span>
-              </div>
-            </div>
-          </div>
+          <SettingToggleCard
+            title="自动检测支付完成"
+            body="开启后后端会定时查询 Stripe SetupIntent，检测到 succeeded 后自动把订单标记为已完成。"
+            enabled={autoDetection.enabled}
+            enabledText="自动检测已开启"
+            disabledText="自动检测已关闭"
+            saving={savingAutoDetection}
+            onToggle={() => void saveAutoDetection(!autoDetection.enabled)}
+          />
 
-          <div className="rounded-xl border border-app-border bg-app-surface p-4 shadow-checkout sm:p-6 xl:col-span-3">
-            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-              <div>
-                <h3 className="text-lg font-semibold">自动检测支付完成</h3>
-                <p className="mt-1 text-sm text-app-secondary">
-                  开启后，后端会定时查询 Stripe SetupIntent 状态；检测到 succeeded 后自动把订单标记为已完成。
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={handleAutoDetectionToggle}
-                disabled={savingAutoDetection}
-                className={`flex w-full items-center justify-center gap-2 rounded-lg px-4 py-2 font-medium text-white disabled:opacity-50 md:w-auto md:min-w-32 ${
-                  autoDetection.enabled ? 'bg-green-600 hover:bg-green-700' : 'bg-neutral-500 hover:bg-neutral-600'
-                }`}
-              >
-                {savingAutoDetection && <Loader2 size={16} className="animate-spin" />}
-                {autoDetection.enabled ? '已开启' : '已关闭'}
-              </button>
-            </div>
-          </div>
+          <SettingToggleCard
+            title="维护模式"
+            body="开启后新提交订单会直接返回维护提示，不会占用兑换码；关闭后合法订单继续进入生成队列。"
+            enabled={maintenanceMode.enabled}
+            enabledText="维护已开启"
+            disabledText="维护已关闭"
+            saving={savingMaintenance}
+            onToggle={() => void saveMaintenanceMode(!maintenanceMode.enabled)}
+          />
         </div>
       )}
     </Layout>
+  );
+}
+
+function ProxyPoolTextarea({
+  title,
+  value,
+  onChange,
+}: {
+  title: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="mb-4">
+      <label className="mb-1 block text-sm font-medium text-app-primary">{title}</label>
+      <textarea
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder="host:port:username:password，每行一个"
+        rows={4}
+        autoComplete="off"
+        spellCheck={false}
+        className="w-full rounded-lg border border-app-border px-3 py-2 font-mono text-sm outline-none focus:border-app-accent"
+      />
+    </div>
+  );
+}
+
+function ProxyPoolStatus({ title, setting }: { title: string; setting: ProxyPoolSetting }) {
+  return (
+    <div className="rounded-xl border border-app-border bg-app-surface p-4 shadow-checkout sm:p-6">
+      <h3 className="mb-4 text-lg font-semibold">{title}</h3>
+      {setting.proxies.length === 0 ? (
+        <p className="text-sm text-app-secondary">未配置</p>
+      ) : (
+        <div className="space-y-2">
+          {setting.proxies.map((proxy) => (
+            <div key={proxy.id} className="rounded-lg bg-neutral-50 p-3 text-xs">
+              <div className="break-all font-mono">{proxy.maskedProxy}</div>
+              <div className={proxy.healthy === false ? 'mt-1 text-amber-700' : 'mt-1 text-emerald-700'}>
+                {proxy.healthy === false ? '冷却中' : '健康'}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SettingToggleCard({
+  title,
+  body,
+  enabled,
+  enabledText,
+  disabledText,
+  saving,
+  onToggle,
+}: {
+  title: string;
+  body: string;
+  enabled: boolean;
+  enabledText: string;
+  disabledText: string;
+  saving: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div className="rounded-xl border border-app-border bg-app-surface p-4 shadow-checkout sm:p-6 xl:col-span-3">
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div>
+          <h3 className="text-lg font-semibold">{title}</h3>
+          <p className="mt-1 text-sm text-app-secondary">{body}</p>
+        </div>
+        <button
+          type="button"
+          onClick={onToggle}
+          disabled={saving}
+          className={`flex w-full items-center justify-center gap-2 rounded-lg px-4 py-2 font-medium text-white disabled:opacity-50 md:w-auto md:min-w-36 ${
+            enabled ? 'bg-green-600 hover:bg-green-700' : 'bg-neutral-500 hover:bg-neutral-600'
+          }`}
+        >
+          {saving && <Loader2 size={16} className="animate-spin" />}
+          {enabled ? enabledText : disabledText}
+        </button>
+      </div>
+    </div>
   );
 }

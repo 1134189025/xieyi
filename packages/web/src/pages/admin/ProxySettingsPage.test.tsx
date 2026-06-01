@@ -26,18 +26,24 @@ vi.mock('react-hot-toast', () => ({
   },
 }));
 
-function mockSettingsResponse(autoDetectionEnabled = true) {
+function proxySettingsResponse() {
+  return {
+    chatGpt: {
+      enabled: true,
+      proxies: [{ id: 'chat-1', host: 'chat.example', port: 10000, username: 'chat-user', maskedProxy: 'http://chat-user:****@chat.example:10000', healthy: true }],
+    },
+    stripe: {
+      enabled: true,
+      proxies: [{ id: 'stripe-1', host: 'stripe.example', port: 10001, username: 'stripe-user', maskedProxy: 'http://stripe-user:****@stripe.example:10001', healthy: true }],
+    },
+  };
+}
+
+function mockSettingsResponse() {
   (api.get as Mock)
-    .mockResolvedValueOnce({
-      data: {
-        enabled: false,
-        host: null,
-        port: null,
-        username: null,
-        maskedProxy: null,
-      },
-    })
-    .mockResolvedValueOnce({ data: { enabled: autoDetectionEnabled } });
+    .mockResolvedValueOnce({ data: proxySettingsResponse() })
+    .mockResolvedValueOnce({ data: { enabled: true } })
+    .mockResolvedValueOnce({ data: { enabled: false } });
 }
 
 async function renderSettingsPage() {
@@ -47,6 +53,8 @@ async function renderSettingsPage() {
 
   await act(async () => {
     root.render(<ProxySettingsPage />);
+    await Promise.resolve();
+    await Promise.resolve();
   });
 
   return { container, root };
@@ -64,35 +72,65 @@ describe('ProxySettingsPage', () => {
     document.body.innerHTML = '';
   });
 
-  it('loads proxy and auto payment detection settings', async () => {
-    mockSettingsResponse(true);
+  it('loads ChatGPT proxy pool, Stripe proxy pool, auto detection, and maintenance mode', async () => {
+    mockSettingsResponse();
 
     const { container, root } = await renderSettingsPage();
     mountedRoot = root;
 
     expect(api.get).toHaveBeenCalledWith('/admin/settings/proxy');
     expect(api.get).toHaveBeenCalledWith('/admin/settings/auto-payment-detection');
-    expect(container.textContent).toContain('系统设置');
-    expect(container.textContent).toContain('自动检测支付完成');
-    expect(container.textContent).toContain('已开启');
+    expect(api.get).toHaveBeenCalledWith('/admin/settings/maintenance-mode');
+    expect(container.textContent).toContain('ChatGPT 代理池');
+    expect(container.textContent).toContain('Stripe 代理池');
+    expect(container.textContent).toContain('维护模式');
+    expect(container.textContent).toContain('http://chat-user:****@chat.example:10000');
+    expect(container.textContent).not.toContain('chat-pass');
   });
 
-  it('saves auto payment detection switch', async () => {
-    mockSettingsResponse(true);
-    (api.put as Mock).mockResolvedValueOnce({ data: { enabled: false } });
+  it('saves separate proxy pools and toggles maintenance mode', async () => {
+    mockSettingsResponse();
+    (api.put as Mock)
+      .mockResolvedValueOnce({ data: proxySettingsResponse() })
+      .mockResolvedValueOnce({ data: { enabled: true } });
 
     const { container, root } = await renderSettingsPage();
     mountedRoot = root;
-    const toggleButton = Array.from(container.querySelectorAll('button')).find((button) =>
-      button.textContent?.includes('已开启'),
-    );
-    expect(toggleButton).not.toBeUndefined();
 
+    const textareas = container.querySelectorAll<HTMLTextAreaElement>('textarea');
     await act(async () => {
-      toggleButton!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      setTextareaValue(textareas[0], 'chat.example:10000:chat-user:chat-pass');
+      textareas[0].dispatchEvent(new Event('input', { bubbles: true }));
+      setTextareaValue(textareas[1], 'stripe.example:10001:stripe-user:stripe-pass');
+      textareas[1].dispatchEvent(new Event('input', { bubbles: true }));
     });
 
-    expect(api.put).toHaveBeenCalledWith('/admin/settings/auto-payment-detection', { enabled: false });
-    expect(container.textContent).toContain('已关闭');
+    const saveButton = Array.from(container.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('保存代理池'),
+    );
+    await act(async () => {
+      saveButton!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    expect(api.put).toHaveBeenCalledWith('/admin/settings/proxy', {
+      chatGptProxyPool: 'chat.example:10000:chat-user:chat-pass',
+      stripeProxyPool: 'stripe.example:10001:stripe-user:stripe-pass',
+    });
+
+    const maintenanceButton = Array.from(container.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('维护已关闭'),
+    );
+    await act(async () => {
+      maintenanceButton!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    expect(api.put).toHaveBeenCalledWith('/admin/settings/maintenance-mode', { enabled: true });
   });
 });
+
+function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+  setter?.call(textarea, value);
+}

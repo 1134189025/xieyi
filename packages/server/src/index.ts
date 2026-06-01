@@ -18,13 +18,14 @@ import adminRoutes from './routes/admin.routes.ts';
 const app = express();
 const httpServer = createServer(app);
 
+app.set('trust proxy', 1);
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors({ origin: config.corsOrigin, credentials: true }));
 app.use(express.json({ limit: '1mb' }));
 
 const orderLimiter = rateLimit({
   windowMs: 60_000,
-  max: 5,
+  max: config.createOrderRateLimitPerMin,
   message: { error: 'Too many requests, please try again later' },
 });
 

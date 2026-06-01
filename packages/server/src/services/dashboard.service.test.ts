@@ -13,7 +13,12 @@ const prisma = {
   },
 };
 
+const getPixGenerationQueueMetrics = vi.fn();
+const getProxyPoolHealthSummary = vi.fn();
+
 vi.mock('../db.ts', () => ({ prisma }));
+vi.mock('../queues/pix-generation.queue.ts', () => ({ getPixGenerationQueueMetrics }));
+vi.mock('./settings.service.ts', () => ({ getProxyPoolHealthSummary }));
 
 const { getDashboardStats } = await import('./dashboard.service.ts');
 
@@ -21,11 +26,24 @@ describe('dashboard.service', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useRealTimers();
-    prisma.$queryRaw.mockResolvedValue([]);
+    prisma.$queryRaw
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ average_seconds: 180 }]);
     prisma.redemptionCode.count.mockResolvedValueOnce(30).mockResolvedValueOnce(12);
+    getPixGenerationQueueMetrics.mockResolvedValue({
+      waitingCount: 8,
+      delayedCount: 1,
+      activeCount: 2,
+      failedCount: 3,
+      oldestWaitingSeconds: 420,
+    });
+    getProxyPoolHealthSummary.mockResolvedValue({
+      chatGpt: { total: 3, healthy: 2, coolingDown: 1 },
+      stripe: { total: 4, healthy: 4, coolingDown: 0 },
+    });
   });
 
-  it('returns global completion counters without per-worker performance', async () => {
+  it('returns global completion counters and queue operations metrics without per-worker performance', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-06-03T10:30:00.000Z'));
     prisma.order.count
@@ -36,7 +54,9 @@ describe('dashboard.service', () => {
       .mockResolvedValueOnce(5)
       .mockResolvedValueOnce(1)
       .mockResolvedValueOnce(1)
-      .mockResolvedValueOnce(0);
+      .mockResolvedValueOnce(0)
+      .mockResolvedValueOnce(3)
+      .mockResolvedValueOnce(1);
 
     const stats = await getDashboardStats();
 
@@ -52,6 +72,19 @@ describe('dashboard.service', () => {
         expiredOrders: 0,
         totalCodes: 30,
         unusedCodes: 12,
+      },
+      queue: {
+        waitingCount: 8,
+        delayedCount: 1,
+        activeCount: 2,
+        failedCount: 3,
+        oldestWaitingSeconds: 420,
+        averageGenerationSeconds: 180,
+        successRateLastHour: 75,
+      },
+      proxyHealth: {
+        chatGpt: { total: 3, healthy: 2, coolingDown: 1 },
+        stripe: { total: 4, healthy: 4, coolingDown: 0 },
       },
     });
     expect(stats).not.toHaveProperty('workerPerformance');

@@ -26,8 +26,9 @@ interface QueueEstimate {
   pendingTotal: number;
   estimatedQueueSeconds: number;
   secondsPerOrder: number;
-  calculationSource: 'recent_completion_cadence' | 'default';
+  calculationSource: 'recent_completion_cadence' | 'default' | 'generation_queue';
   calculatedAt: string;
+  currentGenerationCount?: number;
 }
 
 interface FetchOrderOptions {
@@ -62,11 +63,11 @@ export default function TrackOrderPage() {
   }, [fetchOrder]);
 
   useEffect(() => {
-    fetchOrder();
+    void fetchOrder();
   }, [fetchOrder]);
 
   useEffect(() => {
-    if (order?.status !== 'PENDING_PAYMENT') return;
+    if (order?.status !== 'PENDING_PAYMENT' && order?.status !== 'CREATING_PAYMENT') return;
 
     const refreshTimer = window.setInterval(() => {
       void fetchOrder({ silent: true });
@@ -93,7 +94,7 @@ export default function TrackOrderPage() {
             <AlertCircle className="mx-auto mb-4 h-16 w-16 text-app-error" />
             <p className="text-lg text-app-secondary">{error || '未找到订单'}</p>
             <Link to="/" className="checkout-link mt-4">
-            返回首页
+              返回首页
             </Link>
           </div>
         </div>
@@ -123,48 +124,13 @@ export default function TrackOrderPage() {
             创建时间：{new Date(order.createdAt).toLocaleString('zh-CN')}
           </p>
 
-          {isCompleted && (
-            <div className="view-section py-8 text-center">
-              <div className="success-icon">
-                <CheckCircle />
-              </div>
-              <h2 className="text-2xl font-extrabold tracking-tight text-app-primary">支付已完成</h2>
-              <p className="mt-2 text-sm text-app-secondary">Pix 付款已经确认，订单状态已同步更新。</p>
-              {order.completedAt && (
-                <div className="mt-6 flex justify-between border-t border-app-border pt-4 text-sm">
-                  <span className="text-app-secondary">完成时间</span>
-                  <strong className="text-app-primary">
-                    {new Date(order.completedAt).toLocaleString('zh-CN')}
-                  </strong>
-                </div>
-              )}
-              <Link to="/" className="checkout-button mt-6 inline-block text-center">
-                提交新订单
-              </Link>
-            </div>
-          )}
-
-          {isFailed && (
-            <div className="view-section py-8 text-center">
-              <AlertCircle className="mx-auto h-16 w-16 text-app-error" />
-              <h2 className="mt-4 text-xl font-extrabold text-app-primary">订单失败</h2>
-              {order.errorMessage && (
-                <p className="mx-auto mt-2 max-w-sm text-sm text-app-secondary">{order.errorMessage}</p>
-              )}
-            </div>
-          )}
-
-          {isCreating && (
-            <div className="view-section py-8 text-center">
-              <Loader2 className="mx-auto h-12 w-12 animate-spin text-app-accent" />
-              <p className="mt-4 text-sm text-app-secondary">正在生成 Pix 二维码，请稍候...</p>
-            </div>
-          )}
-
+          {isCompleted && <CompletedOrder order={order} />}
+          {isFailed && <FailedOrder order={order} />}
+          {isCreating && <CreatingPaymentOrder queueEstimate={order.queueEstimate} />}
           {isPending && (
             <div className="view-section">
               <p className="checkout-lead">请让工人扫描二维码，或复制 Pix 付款码完成付款确认。</p>
-              {order.queueEstimate && <QueueEstimateCard queueEstimate={order.queueEstimate} />}
+              {order.queueEstimate && <PendingQueueEstimateCard queueEstimate={order.queueEstimate} />}
               <QrCodeDisplay
                 pixCode={order.pixCode}
                 pixQrPngBase64={order.pixQrPngBase64}
@@ -173,13 +139,7 @@ export default function TrackOrderPage() {
               />
             </div>
           )}
-
-          {isClosed && (
-            <div className="view-section py-8 text-center">
-              <AlertCircle className="mx-auto h-16 w-16 text-app-secondary" />
-              <p className="mt-4 text-sm text-app-secondary">订单已关闭，无法继续支付。</p>
-            </div>
-          )}
+          {isClosed && <ClosedOrder />}
 
           {!isCompleted && (
             <div className="mt-6 text-center">
@@ -194,7 +154,76 @@ export default function TrackOrderPage() {
   );
 }
 
-function QueueEstimateCard({ queueEstimate }: { queueEstimate: QueueEstimate }) {
+function CompletedOrder({ order }: { order: OrderData }) {
+  return (
+    <div className="view-section py-8 text-center">
+      <div className="success-icon">
+        <CheckCircle />
+      </div>
+      <h2 className="text-2xl font-extrabold tracking-tight text-app-primary">支付已完成</h2>
+      <p className="mt-2 text-sm text-app-secondary">Pix 付款已经确认，订单状态已同步更新。</p>
+      {order.completedAt && (
+        <div className="mt-6 flex justify-between border-t border-app-border pt-4 text-sm">
+          <span className="text-app-secondary">完成时间</span>
+          <strong className="text-app-primary">
+            {new Date(order.completedAt).toLocaleString('zh-CN')}
+          </strong>
+        </div>
+      )}
+      <Link to="/" className="checkout-button mt-6 inline-block text-center">
+        提交新订单
+      </Link>
+    </div>
+  );
+}
+
+function FailedOrder({ order }: { order: OrderData }) {
+  return (
+    <div className="view-section py-8 text-center">
+      <AlertCircle className="mx-auto h-16 w-16 text-app-error" />
+      <h2 className="mt-4 text-xl font-extrabold text-app-primary">订单失败</h2>
+      {order.errorMessage && (
+        <p className="mx-auto mt-2 max-w-sm text-sm text-app-secondary">{order.errorMessage}</p>
+      )}
+    </div>
+  );
+}
+
+function CreatingPaymentOrder({ queueEstimate }: { queueEstimate: QueueEstimate | null }) {
+  return (
+    <div className="view-section py-8 text-center">
+      <Loader2 className="mx-auto h-12 w-12 animate-spin text-app-accent" />
+      <h2 className="mt-4 text-xl font-extrabold text-app-primary">正在排队生成 Pix 二维码</h2>
+      <p className="mt-2 text-sm text-app-secondary">订单已经记录，worker 空闲后会自动生成 Pix。</p>
+      {queueEstimate && <GenerationQueueEstimateCard queueEstimate={queueEstimate} />}
+    </div>
+  );
+}
+
+function ClosedOrder() {
+  return (
+    <div className="view-section py-8 text-center">
+      <AlertCircle className="mx-auto h-16 w-16 text-app-secondary" />
+      <p className="mt-4 text-sm text-app-secondary">订单已关闭，无法继续支付。</p>
+    </div>
+  );
+}
+
+function GenerationQueueEstimateCard({ queueEstimate }: { queueEstimate: QueueEstimate }) {
+  const estimatedMinutes = Math.max(1, Math.ceil(queueEstimate.estimatedQueueSeconds / 60));
+  return (
+    <div className="mt-5 rounded-2xl border border-app-border bg-[#fbfcfd] p-4 text-left shadow-sm">
+      <div className="text-sm font-bold text-app-primary">排队 #{queueEstimate.position}</div>
+      <div className="mt-3 grid grid-cols-1 gap-2 text-xs text-app-secondary sm:grid-cols-3">
+        <span>前方 {queueEstimate.ordersAhead} 单</span>
+        <span>生成中 {queueEstimate.currentGenerationCount ?? 0} 单</span>
+        <span>预计约 {estimatedMinutes} 分钟</span>
+      </div>
+    </div>
+  );
+}
+
+function PendingQueueEstimateCard({ queueEstimate }: { queueEstimate: QueueEstimate }) {
   const estimatedMinutes = Math.max(1, Math.ceil(queueEstimate.estimatedQueueSeconds / 60));
   const estimateText = queueEstimate.ordersAhead === 0
     ? '前方无排队订单，预计很快处理'

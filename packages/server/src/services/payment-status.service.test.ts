@@ -9,13 +9,22 @@ const prisma = {
 };
 
 const getAutoPaymentDetectionSetting = vi.fn();
-const getConfiguredProxyUrl = vi.fn();
+const selectHealthyProxy = vi.fn();
+const recordProxySuccess = vi.fn();
+const recordProxyFailure = vi.fn();
+const shouldCountProxyFailure = vi.fn();
 const decrypt = vi.fn((ciphertext: string) => ciphertext.replace(/^encrypted:/, ''));
 const retrieveStripeSetupIntentStatus = vi.fn();
 const broadcastOrderStatusChange = vi.fn();
 
 vi.mock('../db.ts', () => ({ prisma }));
-vi.mock('./settings.service.ts', () => ({ getAutoPaymentDetectionSetting, getConfiguredProxyUrl }));
+vi.mock('./settings.service.ts', () => ({
+  getAutoPaymentDetectionSetting,
+  selectHealthyProxy,
+  recordProxySuccess,
+  recordProxyFailure,
+  shouldCountProxyFailure,
+}));
 vi.mock('../utils/crypto.ts', () => ({ decrypt }));
 vi.mock('@pix/core', () => ({ retrieveStripeSetupIntentStatus }));
 vi.mock('../ws/index.ts', () => ({ broadcastOrderStatusChange }));
@@ -26,11 +35,16 @@ describe('payment-status.service', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getAutoPaymentDetectionSetting.mockResolvedValue({ enabled: true });
-    getConfiguredProxyUrl.mockResolvedValue(null);
+    selectHealthyProxy.mockResolvedValue({
+      id: 'stripe-proxy-1',
+      proxyUrl: 'http://stripe:user@stripe-proxy.example:10001',
+      maskedProxy: 'http://stripe:****@stripe-proxy.example:10001',
+    });
+    shouldCountProxyFailure.mockReturnValue(false);
     prisma.order.findMany.mockResolvedValue([]);
   });
 
-  it('自动检测开关关闭时不查询 Stripe', async () => {
+  it('does not query Stripe when automatic payment detection is disabled', async () => {
     getAutoPaymentDetectionSetting.mockResolvedValue({ enabled: false });
 
     await expect(detectCompletedPixPayments()).resolves.toEqual({
@@ -44,7 +58,7 @@ describe('payment-status.service', () => {
     expect(retrieveStripeSetupIntentStatus).not.toHaveBeenCalled();
   });
 
-  it('Stripe 返回 succeeded 时只按状态自动完成订单并广播', async () => {
+  it('uses the Stripe proxy pool and completes succeeded SetupIntents by order status only', async () => {
     const pendingOrder = {
       id: 'order-1',
       trackingToken: 'track-1',
@@ -69,10 +83,12 @@ describe('payment-status.service', () => {
       skipped: false,
     });
 
+    expect(selectHealthyProxy).toHaveBeenCalledWith('stripe');
     expect(retrieveStripeSetupIntentStatus).toHaveBeenCalledWith(
       expect.objectContaining({
         setupIntentId: 'seti_123',
         clientSecret: 'seti_123_secret_456',
+        proxyUrl: 'http://stripe:user@stripe-proxy.example:10001',
         retry: { attempts: 3 },
       }),
     );
@@ -83,10 +99,11 @@ describe('payment-status.service', () => {
         completedAt: expect.any(Date),
       },
     });
+    expect(recordProxySuccess).toHaveBeenCalledWith('stripe', 'stripe-proxy-1');
     expect(broadcastOrderStatusChange).toHaveBeenCalledWith(completedOrder);
   });
 
-  it('自动检测按客户队列一致的稳定顺序扫描待支付订单', async () => {
+  it('scans pending payment orders in stable order', async () => {
     await detectCompletedPixPayments();
 
     expect(prisma.order.findMany).toHaveBeenCalledWith(
@@ -101,7 +118,7 @@ describe('payment-status.service', () => {
     );
   });
 
-  it('订单已取消或过期时不会被自动检测复活', async () => {
+  it('does not revive an order if it changed before automatic completion update', async () => {
     prisma.order.findMany.mockResolvedValue([{
       id: 'order-1',
       trackingToken: 'track-1',
@@ -121,7 +138,7 @@ describe('payment-status.service', () => {
     expect(broadcastOrderStatusChange).not.toHaveBeenCalled();
   });
 
-  it('requires_action 状态只继续等待不修改订单', async () => {
+  it('leaves requires_action orders untouched', async () => {
     prisma.order.findMany.mockResolvedValue([{
       id: 'order-1',
       trackingToken: 'track-1',
@@ -139,7 +156,9 @@ describe('payment-status.service', () => {
     expect(prisma.order.updateMany).not.toHaveBeenCalled();
     expect(broadcastOrderStatusChange).not.toHaveBeenCalled();
   });
-  it('Stripe 返回的 SetupIntent id 与订单不一致时不自动完成', async () => {
+
+  it('records retryable Stripe proxy failures without failing the detector loop', async () => {
+    const timeout = Object.assign(new Error('timeout'), { code: 'UPSTREAM_TIMEOUT' });
     prisma.order.findMany.mockResolvedValue([{
       id: 'order-1',
       trackingToken: 'track-1',
@@ -147,14 +166,14 @@ describe('payment-status.service', () => {
       setupIntentId: 'seti_123',
       setupIntentClientSecret: 'encrypted:seti_123_secret_456',
     }]);
-    retrieveStripeSetupIntentStatus.mockResolvedValue({ id: 'seti_other', status: 'succeeded' });
+    retrieveStripeSetupIntentStatus.mockRejectedValue(timeout);
+    shouldCountProxyFailure.mockReturnValue(true);
 
     await expect(detectCompletedPixPayments()).resolves.toMatchObject({
       checked: 1,
       completed: 0,
     });
 
-    expect(prisma.order.updateMany).not.toHaveBeenCalled();
-    expect(broadcastOrderStatusChange).not.toHaveBeenCalled();
+    expect(recordProxyFailure).toHaveBeenCalledWith('stripe', 'stripe-proxy-1', timeout);
   });
 });

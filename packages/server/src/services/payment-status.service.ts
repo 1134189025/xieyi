@@ -3,7 +3,14 @@ import type { Order } from '@prisma/client';
 import { prisma } from '../db.ts';
 import { decrypt } from '../utils/crypto.ts';
 import { broadcastOrderStatusChange } from '../ws/index.ts';
-import { getAutoPaymentDetectionSetting, getConfiguredProxyUrl } from './settings.service.ts';
+import {
+  getAutoPaymentDetectionSetting,
+  recordProxyFailure,
+  recordProxySuccess,
+  selectHealthyProxy,
+  shouldCountProxyFailure,
+  type SelectedProxy,
+} from './settings.service.ts';
 
 const PAYMENT_STATUS_CHECK_LIMIT = 50;
 
@@ -44,27 +51,28 @@ async function runPixPaymentDetection(): Promise<PixPaymentDetectionResult> {
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     take: PAYMENT_STATUS_CHECK_LIMIT,
   });
-  const proxyUrl = await getConfiguredProxyUrl();
   let completed = 0;
 
   for (const order of orders) {
-    const didComplete = await detectSingleOrderPayment(order, proxyUrl);
+    const stripeProxy = await selectHealthyProxy('stripe');
+    const didComplete = await detectSingleOrderPayment(order, stripeProxy);
     if (didComplete) completed += 1;
   }
 
   return { checked: orders.length, completed, disabled: false, skipped: false };
 }
 
-async function detectSingleOrderPayment(order: Order, proxyUrl: string | null): Promise<boolean> {
+async function detectSingleOrderPayment(order: Order, stripeProxy: SelectedProxy | null): Promise<boolean> {
   if (!order.setupIntentId || !order.setupIntentClientSecret) return false;
 
   try {
     const setupIntentStatus = await retrieveStripeSetupIntentStatus({
       setupIntentId: order.setupIntentId,
       clientSecret: decrypt(order.setupIntentClientSecret),
-      proxyUrl: proxyUrl ?? undefined,
+      proxyUrl: stripeProxy?.proxyUrl,
       retry: { attempts: 3 },
     });
+    await recordProxySuccess('stripe', stripeProxy?.id ?? null);
 
     if (setupIntentStatus.id !== order.setupIntentId) {
       console.warn(`Pix payment status check id mismatch order=${order.id}`);
@@ -89,6 +97,9 @@ async function detectSingleOrderPayment(order: Order, proxyUrl: string | null): 
     if (updatedOrder) broadcastOrderStatusChange(updatedOrder);
     return true;
   } catch (error) {
+    if (shouldCountProxyFailure(error)) {
+      await recordProxyFailure('stripe', stripeProxy?.id ?? null, error);
+    }
     console.warn(`Pix payment status check failed order=${order.id} ${safeStatusCheckLog(error)}`);
     return false;
   }

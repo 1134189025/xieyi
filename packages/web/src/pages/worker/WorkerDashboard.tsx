@@ -49,7 +49,7 @@ export default function WorkerDashboard() {
   const fetchOrders = async () => {
     try {
       const ordersResponse = await api.get('/worker/orders?limit=50');
-      setOrders(sortWorkerOrders(ordersResponse.data.orders));
+      setOrders(sortWorkerOrders(ordersResponse.data.orders.filter(isPendingPaymentOrder)));
     } catch {
       toast.error('订单加载失败');
     } finally {
@@ -245,9 +245,14 @@ function WorkerPixCodeBlock({ pixCode }: { pixCode: string | null }) {
 }
 
 function upsertVisibleOrder(previousOrders: OrderItem[], order: OrderItem) {
+  if (!isPendingPaymentOrder(order)) return previousOrders;
   const nextOrders = previousOrders.filter((existingOrder) => existingOrder.id !== order.id);
   nextOrders.push(order);
   return sortWorkerOrders(nextOrders);
+}
+
+function isPendingPaymentOrder(order: OrderItem) {
+  return order.status === 'PENDING_PAYMENT';
 }
 
 function sortWorkerOrders(orders: OrderItem[]) {

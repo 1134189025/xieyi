@@ -9,6 +9,9 @@ export interface AppConfig {
   adminUsername: string;
   adminPassword: string;
   corsOrigin: string;
+  redisUrl: string;
+  pixWorkerConcurrency: number;
+  createOrderRateLimitPerMin: number;
 }
 
 const HEX_64 = /^[0-9a-fA-F]{64}$/;
@@ -19,6 +22,9 @@ const TEST_DEFAULTS = {
   ADMIN_USERNAME: 'admin',
   ADMIN_PASSWORD: 'TestAdminPass-2026',
   CORS_ORIGIN: 'http://localhost:5173',
+  REDIS_URL: 'redis://127.0.0.1:6379',
+  PIX_WORKER_CONCURRENCY: '5',
+  CREATE_ORDER_RATE_LIMIT_PER_MIN: '30',
 };
 
 export function loadConfig(
@@ -36,7 +42,10 @@ export function loadConfig(
   const corsOrigin = nodeEnv === 'production'
     ? requireEnv(source, 'CORS_ORIGIN')
     : source.CORS_ORIGIN ?? 'http://localhost:5173';
+  const redisUrl = requireEnv(source, 'REDIS_URL');
   const port = Number(source.PORT ?? 3000);
+  const pixWorkerConcurrency = Number(source.PIX_WORKER_CONCURRENCY ?? 5);
+  const createOrderRateLimitPerMin = Number(source.CREATE_ORDER_RATE_LIMIT_PER_MIN ?? 30);
 
   if (!Number.isInteger(port) || port <= 0 || port > 65535) {
     throw new Error('PORT must be a valid TCP port');
@@ -50,6 +59,12 @@ export function loadConfig(
   if (adminPassword.length < 12 || adminPassword === 'admin123' || adminPassword === adminUsername || looksLikePlaceholder(adminPassword)) {
     throw new Error('ADMIN_PASSWORD must be changed to a strong password');
   }
+  if (!Number.isInteger(pixWorkerConcurrency) || pixWorkerConcurrency < 1 || pixWorkerConcurrency > 100) {
+    throw new Error('PIX_WORKER_CONCURRENCY must be an integer between 1 and 100');
+  }
+  if (!Number.isInteger(createOrderRateLimitPerMin) || createOrderRateLimitPerMin < 1 || createOrderRateLimitPerMin > 10000) {
+    throw new Error('CREATE_ORDER_RATE_LIMIT_PER_MIN must be an integer between 1 and 10000');
+  }
 
   return {
     port,
@@ -60,6 +75,9 @@ export function loadConfig(
     adminUsername,
     adminPassword,
     corsOrigin,
+    redisUrl,
+    pixWorkerConcurrency,
+    createOrderRateLimitPerMin,
   };
 }
 

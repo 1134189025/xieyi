@@ -5,7 +5,7 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts';
 import {
-  ShoppingCart, CheckCircle, AlertTriangle, Ticket, Clock, Loader2, CalendarDays,
+  ShoppingCart, CheckCircle, AlertTriangle, Ticket, Clock, Loader2, CalendarDays, Activity,
 } from 'lucide-react';
 
 interface DashboardData {
@@ -21,7 +21,26 @@ interface DashboardData {
     totalCodes: number;
     unusedCodes: number;
   };
+  queue: {
+    waitingCount: number;
+    delayedCount: number;
+    activeCount: number;
+    failedCount: number;
+    oldestWaitingSeconds: number | null;
+    averageGenerationSeconds: number;
+    successRateLastHour: number;
+  };
+  proxyHealth: {
+    chatGpt: ProxyHealthGroup;
+    stripe: ProxyHealthGroup;
+  };
   dailyTrend: Array<{ date: string; created: number; completed: number; failed: number }>;
+}
+
+interface ProxyHealthGroup {
+  total: number;
+  healthy: number;
+  coolingDown: number;
 }
 
 export default function AdminDashboard() {
@@ -68,7 +87,7 @@ export default function AdminDashboard() {
           return (
             <div key={card.label} className="rounded-xl border border-app-border bg-app-surface p-4 shadow-checkout">
               <div className="flex items-center gap-3">
-                <div className={`p-2 rounded-lg ${card.color} text-white`}>
+                <div className={`rounded-lg p-2 ${card.color} text-white`}>
                   <Icon size={18} />
                 </div>
                 <div>
@@ -81,8 +100,23 @@ export default function AdminDashboard() {
         })}
       </div>
 
+      <div className="mb-8 grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <QueueMetricCard label="队列等待" value={data.queue.waitingCount + data.queue.delayedCount} />
+        <QueueMetricCard label="处理中" value={data.queue.activeCount} />
+        <QueueMetricCard label="失败任务" value={data.queue.failedCount} />
+      </div>
+
+      <div className="mb-8 grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <OperationalNote
+          title={`最老等待 ${formatMinutes(data.queue.oldestWaitingSeconds)} 分钟`}
+          body={`平均生成耗时 ${formatSeconds(data.queue.averageGenerationSeconds)}，近 1 小时成功率 ${data.queue.successRateLastHour}%`}
+        />
+        <ProxyHealthCard title="ChatGPT 代理" health={data.proxyHealth.chatGpt} />
+        <ProxyHealthCard title="Stripe 代理" health={data.proxyHealth.stripe} />
+      </div>
+
       <div className="rounded-xl border border-app-border bg-app-surface p-4 shadow-checkout sm:p-6">
-        <h3 className="text-lg font-semibold mb-4">近 30 天趋势</h3>
+        <h3 className="mb-4 text-lg font-semibold">近 30 天趋势</h3>
         <ResponsiveContainer width="100%" height={300}>
           <LineChart data={data.dailyTrend}>
             <CartesianGrid strokeDasharray="3 3" />
@@ -97,4 +131,50 @@ export default function AdminDashboard() {
       </div>
     </Layout>
   );
+}
+
+function QueueMetricCard({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-xl border border-app-border bg-app-surface p-4 shadow-checkout">
+      <div className="flex items-center gap-3">
+        <div className="rounded-lg bg-indigo-700 p-2 text-white">
+          <Activity size={18} />
+        </div>
+        <div>
+          <p className="text-2xl font-bold">{value}</p>
+          <p className="text-xs text-app-secondary">{label}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OperationalNote({ title, body }: { title: string; body: string }) {
+  return (
+    <div className="rounded-xl border border-app-border bg-app-surface p-4 shadow-checkout">
+      <p className="font-semibold text-app-primary">{title}</p>
+      <p className="mt-2 text-sm text-app-secondary">{body}</p>
+    </div>
+  );
+}
+
+function ProxyHealthCard({ title, health }: { title: string; health: ProxyHealthGroup }) {
+  return (
+    <div className="rounded-xl border border-app-border bg-app-surface p-4 shadow-checkout">
+      <p className="font-semibold text-app-primary">{title}</p>
+      <p className="mt-2 text-sm text-app-secondary">
+        健康 {health.healthy} / 总数 {health.total}，冷却 {health.coolingDown}
+      </p>
+    </div>
+  );
+}
+
+function formatMinutes(seconds: number | null): number {
+  if (!seconds) return 0;
+  return Math.ceil(seconds / 60);
+}
+
+function formatSeconds(seconds: number): string {
+  if (seconds < 60) return `${seconds} 秒`;
+  return `${Math.ceil(seconds / 60)} 分钟`;
 }

@@ -1,269 +1,193 @@
 # Pix 协议支付平台
 
-巴西 Pix 协议支付 Web 平台，支持三种角色：管理员、工人、客户。
+这是一个 Pix 协议支付 Web 平台，包含客户提交页、工人处理页和管理员后台。
 
-**客户**输入兑换码 + ChatGPT Session → 后端自动生成巴西 Pix 二维码 → **工人**扫码付款并标记完成 → **管理员**管理兑换码、工人和查看数据看板。
+核心流程：
+
+1. 客户提交兑换码和 ChatGPT Session。
+2. API 原子预占兑换码并创建 `CREATING_PAYMENT` 订单。
+3. API 把 Pix 生成任务投递到 Redis + BullMQ 队列，并立即返回追踪链接。
+4. 独立 worker 进程按并发配置生成 ChatGPT checkout 和 Stripe Pix。
+5. 生成成功后订单变为 `PENDING_PAYMENT`，工人页显示二维码或 Pix 付款码。
+6. 工人手动标记完成，或自动检测 Stripe SetupIntent 成功后，订单变为 `PAYMENT_COMPLETED`。
 
 ## 技术栈
 
 | 层级 | 技术 |
-|------|------|
+| --- | --- |
 | 前端 | React + Vite + TailwindCSS + Recharts |
 | 后端 | Express + TypeScript + Socket.io |
+| 队列 | Redis + BullMQ |
 | 数据库 | PostgreSQL + Prisma ORM |
 | 认证 | JWT + bcrypt |
-| 实时通信 | Socket.io (WebSocket) |
 
-## 项目结构
-
-```
-packages/
-├── core/       # Stripe Pix 协议核心模块（可独立使用）
-├── server/     # Express 后端 API + WebSocket
-└── web/        # React 前端
-```
-
-## 部署教程
-
-### 环境要求
+## 环境要求
 
 - Node.js >= 20.18.1
 - PostgreSQL >= 14
+- Redis >= 6
 - npm >= 9
 
-### 1. 克隆仓库
-
-```bash
-git clone https://github.com/1134189025/xieyi.git
-cd xieyi
-```
-
-### 2. 安装依赖
+## 安装
 
 ```bash
 npm install
 ```
 
-### 3. 准备 PostgreSQL 数据库
+## 环境变量
 
-**方式一：Docker（推荐）**
-
-```bash
-docker run -d \
-  --name pix-pg \
-  -e POSTGRES_PASSWORD=postgres \
-  -e POSTGRES_DB=pix_payment \
-  -p 5432:5432 \
-  postgres:16
-```
-
-**方式二：本地 PostgreSQL**
-
-创建数据库：
-
-```sql
-CREATE DATABASE pix_payment;
-```
-
-### 4. 配置环境变量
-
-```bash
-cp packages/server/.env.example packages/server/.env
-```
-
-编辑 `packages/server/.env`：
+`packages/server/.env` 至少需要：
 
 ```env
-# 数据库连接（根据实际情况修改用户名密码）
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/pix_payment
-
-# JWT 密钥（务必改成随机字符串）
+REDIS_URL=redis://127.0.0.1:6379
 JWT_SECRET=REPLACE_WITH_RANDOM_32_PLUS_CHAR_SECRET
-
-# Session 加密密钥（64位 hex 字符串）
 SESSION_ENCRYPTION_KEY=REPLACE_WITH_64_HEX_CHAR_KEY
-
-# 管理员初始账号（首次启动自动创建）
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=REPLACE_WITH_STRONG_ADMIN_PASSWORD
-
-# 服务端口
 PORT=3000
-
-# 前端地址（CORS 用）
 CORS_ORIGIN=http://localhost:5173
+
+# 客户提交限流，只限制同 IP 提交速度，不控制 Pix 生成并发
+CREATE_ORDER_RATE_LIMIT_PER_MIN=30
+
+# 后台 Pix 生成 worker 并发
+PIX_WORKER_CONCURRENCY=5
 ```
 
-> 生成随机密钥：`node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`。`SESSION_ENCRYPTION_KEY` 必须是 64 位 hex；`JWT_SECRET` 和 `ADMIN_PASSWORD` 必须替换为非占位、非默认的强随机值，否则服务端会拒绝启动。
+生成 64 位 hex 密钥：
 
-### 5. 初始化数据库
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+## 数据库
 
 ```bash
 cd packages/server
-npx prisma migrate dev --name init
+npx prisma migrate dev
+npm run db:generate
 ```
 
-### 6. 启动服务
+## 开发启动
 
-**开发模式（两个终端）：**
+需要三个进程：
 
 ```bash
-# 终端 1：启动后端
-cd packages/server
-npm run dev
+# 终端 1：API + WebSocket
+npm --workspace @pix/server run dev
 
-# 终端 2：启动前端
-cd packages/web
-npm run dev
+# 终端 2：Pix 生成 worker
+npm --workspace @pix/server run start:worker
+
+# 终端 3：前端
+npm --workspace @pix/web run dev
 ```
 
-访问 `http://localhost:5173`，管理员用 `.env` 中配置的账号登录。
+访问 `http://localhost:5173`。
 
-**生产模式：**
+## 生产 PM2
 
-```bash
-# 构建前端
-cd packages/web
-npm run build
-
-# 启动后端（将前端静态文件交给 nginx 或后端托管）
-cd packages/server
-npm run start
-```
-
-### 7. 生产环境部署（Linux 服务器）
+API 和 worker 必须分开管理，避免 API 扩容时重复承担生成任务。
 
 ```bash
-# 安装 Node.js
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt-get install -y nodejs
-
-# 安装 PostgreSQL
-sudo apt-get install -y postgresql
-sudo -u postgres createdb pix_payment
-
-# 克隆并安装
-git clone https://github.com/1134189025/xieyi.git
-cd xieyi
-npm install
-
-# 配置环境变量
-cp packages/server/.env.example packages/server/.env
-nano packages/server/.env  # 编辑配置
-
-# 初始化数据库
-cd packages/server
-npx prisma migrate dev --name init
-
-# 构建前端
-cd ../web
-npm run build
-
-# 使用 pm2 管理后端进程
 npm install -g pm2
-cd ../server
-pm2 start "npx tsx src/index.ts" --name pix-server
+
+pm2 start "npm --workspace @pix/server run start" --name pix-api
+pm2 start "npm --workspace @pix/server run start:worker" --name pix-worker
+
 pm2 save
 pm2 startup
 ```
 
-**Nginx 反向代理配置（可选）：**
+调整吞吐时优先调 `PIX_WORKER_CONCURRENCY` 和 worker 进程数；客户提交高峰不会直接失败，合法订单会留在队列等待。
+
+## Nginx 真实 IP
+
+后端启用了 `app.set('trust proxy', 1)`，限流按真实客户端 IP 计算。Nginx 需要传递真实 IP：
 
 ```nginx
-server {
-    listen 80;
-    server_name your-domain.com;
+location /api/ {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
 
-    # 前端静态文件
-    location / {
-        root /path/to/xieyi/packages/web/dist;
-        try_files $uri $uri/ /index.html;
-    }
-
-    # 后端 API
-    location /api/ {
-        proxy_pass http://127.0.0.1:3000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-
-    # WebSocket
-    location /socket.io/ {
-        proxy_pass http://127.0.0.1:3000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-    }
+location /socket.io/ {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 }
 ```
 
-## 使用流程
+## 排队策略
 
-### 管理员
+- `POST /api/orders` 正常返回 `202` 和 `trackingToken`。
+- 并发满时任务保持在 BullMQ `waiting` 或 `delayed`，不会因为队列积压拒单。
+- 只有管理员开启维护模式时，新订单才会被拒绝，且不会占用兑换码。
+- 生成失败后订单变为 `FAILED`，兑换码会释放复用，追踪页只显示安全错误提示。
+- 工人页只显示 `PENDING_PAYMENT` 订单，不显示排队生成中的订单。
 
-1. 登录后台 → 进入「兑换码」页面 → 批量生成兑换码
-2. 进入「工人管理」→ 创建工人账号
-3. 在「看板」查看总已完成、今日已完成、本周已完成等订单统计
+## 代理池维护
 
-### 客户
+后台系统设置包含：
 
-1. 访问首页，输入兑换码 + ChatGPT Session（accessToken 或 session cookie）
-2. 系统自动生成 Pix 二维码
-3. 页面实时显示订单状态，完成后自动更新
+- `ChatGPT 代理池`：用于 Session 解析和 ChatGPT checkout 请求。
+- `Stripe 代理池`：用于 Stripe Pix 三步请求和自动检测 SetupIntent。
+- `维护模式`：手动拒绝新订单，适合停机维护或代理池全不可用时使用。
+- `自动检测支付完成`：开启后后端定时扫描 Stripe 状态。
 
-### 工人
+代理格式为每行一个：
 
-1. 登录后台 → 看到待处理订单和 Pix 二维码
-2. 用手机扫码完成 Pix 支付
-3. 点击「标记已完成」
-
-## 核心流程
-
-```
-客户提交兑换码 + Session
-        ↓
-后端验证兑换码 → 提取 accessToken
-        ↓
-调用 ChatGPT Checkout API → 生成巴西 Stripe 长链接
-        ↓
-调用 Stripe 协议支付 → 生成 Pix 二维码
-        ↓
-工人扫码或复制 Pix 付款码 → 自动检测或手动标记完成 → WebSocket 实时通知客户
+```text
+host:port:username:password
 ```
 
-## API 端点
+代理失败规则：
 
-| Method | Path | 说明 | 认证 |
-|--------|------|------|------|
-| POST | /api/auth/login | 登录 | 无 |
-| POST | /api/orders | 客户提交订单 | 无 |
-| GET | /api/orders/track/:token | 查询订单状态 | 无 |
-| GET | /api/worker/orders | 全部待支付订单 | Worker/Admin |
-| GET | /api/worker/summary | 总体/今日/本周完成数 | Worker/Admin |
-| POST | /api/worker/orders/:id/complete | 标记待支付订单完成 | Worker/Admin |
-| POST | /api/admin/redemption-codes | 批量生成兑换码 | Admin |
-| GET | /api/admin/redemption-codes | 兑换码列表 | Admin |
-| POST | /api/admin/workers | 创建工人 | Admin |
-| GET | /api/admin/workers | 工人列表 | Admin |
-| GET | /api/admin/orders | 所有订单 | Admin |
-| GET | /api/admin/dashboard | 统计数据 | Admin |
+- 超时、网络错误、408、429、5xx 会计入失败。
+- 无效 Session、账号无资格、兑换码错误不惩罚代理。
+- 单代理连续失败 3 次后冷却 10 分钟。
+- job 重试时会重新选择健康代理。
+- 日志只记录订单 id、阶段、代理脱敏标识、错误码和耗时，不应记录 Session、Pix code、client secret 或代理密码。
 
-## CLI 工具（独立使用）
+## 管理指标
 
-原有的 CLI 工具仍可独立使用：
+Dashboard 显示：
+
+- 总已完成、今日已完成、本周已完成。
+- 队列等待数、处理中数、失败任务数。
+- 最老等待时间、平均生成耗时、近 1 小时成功率。
+- ChatGPT 和 Stripe 代理池健康数量。
+
+## 常用命令
 
 ```bash
-# 从 HAR 提取 Pix 支付数据
-npx tsx packages/core/cli.ts from-har --har <har-file> --out ./output
-
-# 纯 HTTP 协议支付
-npx tsx packages/core/cli.ts direct --checkout-url <url> --out ./output
+npm --workspace @pix/server run db:generate
+npm --workspace @pix/server run test
+npm --workspace @pix/server run typecheck
+npm --workspace @pix/web run test
+npm --workspace @pix/web run typecheck
+npm --workspace @pix/web run build
+git diff --check
 ```
 
-## 注意事项
+## API 摘要
 
-- `direct` 模式可能因 Stripe 风控字段缺失而失败，后端会将此类订单标记为 FAILED
-- ChatGPT Session 数据在后端使用 AES-256-GCM 加密存储，Pix 生成成功后自动清除
-- 客户提交订单接口有限流保护（5 次/分钟/IP）
-- Pix 二维码过期后订单自动标记为 EXPIRED
+| Method | Path | 说明 | 认证 |
+| --- | --- | --- | --- |
+| POST | `/api/auth/login` | 登录 | 无 |
+| POST | `/api/orders` | 创建排队订单，返回追踪 token | 无 |
+| GET | `/api/orders/track/:token` | 查询订单与排队估算 | 无 |
+| GET | `/api/worker/orders` | 全部待支付订单 | Worker/Admin |
+| GET | `/api/worker/summary` | 总体/今日/本周完成数 | Worker/Admin |
+| POST | `/api/worker/orders/:id/complete` | 标记待支付订单完成 | Worker/Admin |
+| GET | `/api/admin/dashboard` | 看板统计和队列指标 | Admin |
+| GET/PUT | `/api/admin/settings/proxy` | ChatGPT/Stripe 代理池 | Admin |
+| GET/PUT | `/api/admin/settings/maintenance-mode` | 维护模式 | Admin |
+| GET/PUT | `/api/admin/settings/auto-payment-detection` | 自动检测开关 | Admin |
