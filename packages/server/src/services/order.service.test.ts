@@ -76,7 +76,7 @@ describe('order.service', () => {
       generationQueuedAt: queuedAt,
       createdAt: queuedAt,
     }]);
-    enqueuePixGenerationJob.mockResolvedValue({ id: 'pix-generation:order-1' });
+    enqueuePixGenerationJob.mockResolvedValue({ id: 'pix-generation-order-1' });
 
     const response = await createOrder('ABCD-1234', 'session-token-value');
 
@@ -110,6 +110,7 @@ describe('order.service', () => {
   });
 
   it('releases the reserved code if queue enqueue fails before the tracking token is returned', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
     prisma.$queryRaw.mockResolvedValue([{
       id: 'order-1',
       redemptionCodeId: 'code-1',
@@ -118,7 +119,7 @@ describe('order.service', () => {
       generationQueuedAt: new Date('2026-06-01T00:00:00.000Z'),
       createdAt: new Date('2026-06-01T00:00:00.000Z'),
     }]);
-    enqueuePixGenerationJob.mockRejectedValue(new Error('Redis unavailable'));
+    enqueuePixGenerationJob.mockRejectedValue(new Error('Custom Id cannot contain :'));
 
     await expect(createOrder('ABCD-1234', 'session-token-value')).rejects.toMatchObject({
       statusCode: 502,
@@ -126,6 +127,9 @@ describe('order.service', () => {
     });
 
     expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining('message=Custom Id cannot contain :'),
+    );
   });
 
   it('reports generation queue position for a creating payment order', async () => {
