@@ -65,7 +65,7 @@ export default function AdminDashboard() {
     <Layout>
       <h2 className="mb-6 text-2xl font-bold text-app-primary">数据看板</h2>
 
-      <div className="mb-8 grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
+      <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6">
         {statCards.map((card) => {
           const Icon = card.icon;
           return (
@@ -85,7 +85,7 @@ export default function AdminDashboard() {
       </div>
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-        <div className="rounded-xl border border-app-border bg-app-surface p-6 shadow-checkout">
+        <div className="rounded-xl border border-app-border bg-app-surface p-4 shadow-checkout sm:p-6">
           <h3 className="text-lg font-semibold mb-4">近 30 天趋势</h3>
           <ResponsiveContainer width="100%" height={300}>
             <LineChart data={data.dailyTrend}>
@@ -100,7 +100,7 @@ export default function AdminDashboard() {
           </ResponsiveContainer>
         </div>
 
-        <div className="rounded-xl border border-app-border bg-app-surface p-6 shadow-checkout">
+        <div className="rounded-xl border border-app-border bg-app-surface p-4 shadow-checkout sm:p-6">
           <h3 className="text-lg font-semibold mb-4">工人绩效</h3>
           {data.workerPerformance.length === 0 ? (
             <div className="flex h-64 items-center justify-center text-app-secondary">

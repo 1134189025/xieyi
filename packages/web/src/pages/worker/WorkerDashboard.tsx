@@ -3,9 +3,8 @@ import api from '../../api/client';
 import { useAuth } from '../../hooks/useAuth';
 import { useSocket } from '../../hooks/useSocket';
 import QrCodeDisplay from '../../components/QrCodeDisplay';
-import Layout from '../../components/Layout';
 import toast from 'react-hot-toast';
-import { CheckCircle, Loader2, QrCode } from 'lucide-react';
+import { CheckCircle, Loader2 } from 'lucide-react';
 
 interface OrderItem {
   id: string;
@@ -76,42 +75,23 @@ export default function WorkerDashboard() {
   };
 
   return (
-    <Layout>
-      <div className="mb-6">
-        <h2 className="text-2xl font-bold text-app-primary">待处理订单</h2>
-        <p className="mt-1 text-app-secondary">{orders.length} 个订单等待付款</p>
-      </div>
-
+    <main className="min-h-screen bg-app-body px-4 py-5 text-app-primary sm:px-6 lg:px-8">
       {loading ? (
-        <div className="flex justify-center py-20">
+        <div className="flex min-h-[70vh] items-center justify-center">
           <Loader2 className="h-8 w-8 animate-spin text-app-accent" />
         </div>
       ) : orders.length === 0 ? (
-        <div className="py-20 text-center">
-          <QrCode className="mx-auto mb-4 h-16 w-16 text-neutral-300" />
-          <p className="text-lg text-app-secondary">暂无待处理订单</p>
+        <div className="flex min-h-[70vh] items-center justify-center text-center text-app-secondary">
+          暂无待付款
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
+        <div className="mx-auto grid w-full max-w-5xl grid-cols-1 gap-5 sm:gap-6 md:grid-cols-2 xl:grid-cols-3">
           {orders.map((order) => (
-            <div key={order.id} className="rounded-xl border border-app-border bg-app-surface p-6 shadow-checkout">
-              <div className="mb-4 flex items-start justify-between">
-                <div>
-                  <p className="font-mono text-xs text-app-secondary">{order.trackingToken}</p>
-                  <p className="mt-1 text-xs text-app-secondary">
-                    {new Date(order.createdAt).toLocaleString('zh-CN')}
-                  </p>
-                </div>
-                <span className="rounded-full border border-[#e7dfca] bg-[#fffaf0] px-2 py-0.5 text-xs text-[#6b4e16]">
-                  待支付
-                </span>
-              </div>
-
+            <section key={order.id} className="rounded-card border border-app-border bg-app-surface p-4 shadow-checkout sm:p-5">
               <QrCodeDisplay
                 pixCode={order.pixCode}
                 pixQrPngBase64={order.pixQrPngBase64}
                 pixImageUrl={order.pixImageUrl}
-                pixExpiresAt={order.pixExpiresAt}
               />
 
               <button
@@ -126,10 +106,10 @@ export default function WorkerDashboard() {
                 )}
                 标记为已完成
               </button>
-            </div>
+            </section>
           ))}
         </div>
       )}
-    </Layout>
+    </main>
   );
 }

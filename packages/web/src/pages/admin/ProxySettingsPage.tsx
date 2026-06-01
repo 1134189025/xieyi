@@ -115,7 +115,7 @@ export default function ProxySettingsPage() {
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
-          <div className="rounded-xl border border-app-border bg-app-surface p-6 shadow-checkout xl:col-span-2">
+          <div className="rounded-xl border border-app-border bg-app-surface p-4 shadow-checkout sm:p-6 xl:col-span-2">
             <h3 className="mb-4 text-lg font-semibold">全局代理</h3>
             <form onSubmit={handleProxySubmit} className="space-y-4">
               <div>
@@ -129,7 +129,7 @@ export default function ProxySettingsPage() {
                   spellCheck={false}
                   className="w-full rounded-lg border border-app-border px-3 py-2 font-mono text-sm outline-none focus:border-app-accent"
                 />
-                <p className="mt-2 text-xs text-app-secondary">
+                <p className="mt-2 break-all text-xs text-app-secondary">
                   示例：proxy.example:10000:proxy-user-zone-custom-region-JP-session-demo-sessTime-5-sessAuto-1:proxy-pass
                 </p>
               </div>
@@ -138,7 +138,7 @@ export default function ProxySettingsPage() {
                 <button
                   type="submit"
                   disabled={savingProxy}
-                  className="flex items-center gap-2 rounded-lg bg-app-accent px-4 py-2 text-white hover:bg-app-accentHover disabled:opacity-50"
+                  className="flex w-full items-center justify-center gap-2 rounded-lg bg-app-accent px-4 py-2 text-white hover:bg-app-accentHover disabled:opacity-50 sm:w-auto"
                 >
                   {savingProxy ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
                   保存代理
@@ -147,7 +147,7 @@ export default function ProxySettingsPage() {
                   type="button"
                   onClick={handleClearProxy}
                   disabled={savingProxy || !proxySetting.enabled}
-                  className="flex items-center gap-2 rounded-lg bg-neutral-100 px-4 py-2 text-app-primary hover:bg-neutral-200 disabled:opacity-50"
+                  className="flex w-full items-center justify-center gap-2 rounded-lg bg-neutral-100 px-4 py-2 text-app-primary hover:bg-neutral-200 disabled:opacity-50 sm:w-auto"
                 >
                   <Trash2 size={16} />
                   清空代理
@@ -156,7 +156,7 @@ export default function ProxySettingsPage() {
             </form>
           </div>
 
-          <div className="rounded-xl border border-app-border bg-app-surface p-6 shadow-checkout">
+          <div className="rounded-xl border border-app-border bg-app-surface p-4 shadow-checkout sm:p-6">
             <h3 className="mb-4 text-lg font-semibold">代理状态</h3>
             <div className="space-y-3 text-sm">
               <div className="flex justify-between gap-4">
@@ -186,7 +186,7 @@ export default function ProxySettingsPage() {
             </div>
           </div>
 
-          <div className="rounded-xl border border-app-border bg-app-surface p-6 shadow-checkout xl:col-span-3">
+          <div className="rounded-xl border border-app-border bg-app-surface p-4 shadow-checkout sm:p-6 xl:col-span-3">
             <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
               <div>
                 <h3 className="text-lg font-semibold">自动检测支付完成</h3>
@@ -198,7 +198,7 @@ export default function ProxySettingsPage() {
                 type="button"
                 onClick={handleAutoDetectionToggle}
                 disabled={savingAutoDetection}
-                className={`flex min-w-32 items-center justify-center gap-2 rounded-lg px-4 py-2 font-medium text-white disabled:opacity-50 ${
+                className={`flex w-full items-center justify-center gap-2 rounded-lg px-4 py-2 font-medium text-white disabled:opacity-50 md:w-auto md:min-w-32 ${
                   autoDetection.enabled ? 'bg-green-600 hover:bg-green-700' : 'bg-neutral-500 hover:bg-neutral-600'
                 }`}
               >

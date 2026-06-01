@@ -65,7 +65,7 @@ export default function OrdersPage() {
       <h2 className="mb-6 text-2xl font-bold text-app-primary">订单管理</h2>
 
       <div className="overflow-hidden rounded-xl border border-app-border bg-app-surface shadow-checkout">
-        <div className="flex flex-wrap items-center gap-4 border-b border-app-border px-6 py-4">
+        <div className="flex flex-wrap items-center gap-3 border-b border-app-border px-4 py-4 sm:gap-4 sm:px-6">
           <span className="text-sm text-app-secondary">状态：</span>
           {statuses.map((s) => (
             <button
@@ -78,7 +78,7 @@ export default function OrdersPage() {
               {s ? orderStatusLabel(s) : '全部'}
             </button>
           ))}
-          <span className="ml-auto text-sm text-app-secondary">共 {total} 条</span>
+          <span className="w-full text-sm text-app-secondary sm:ml-auto sm:w-auto">共 {total} 条</span>
         </div>
 
         {loading ? (
@@ -88,54 +88,56 @@ export default function OrdersPage() {
         ) : error ? (
           <div className="py-10 text-center text-app-secondary">{error}</div>
         ) : (
-          <table className="w-full text-sm">
-            <thead className="bg-neutral-50">
-              <tr>
-                <th className="px-6 py-3 text-left font-medium text-app-secondary">追踪码</th>
-                <th className="px-6 py-3 text-left font-medium text-app-secondary">状态</th>
-                <th className="px-6 py-3 text-left font-medium text-app-secondary">工人</th>
-                <th className="px-6 py-3 text-left font-medium text-app-secondary">创建时间</th>
-                <th className="px-6 py-3 text-left font-medium text-app-secondary">完成时间</th>
-                <th className="px-6 py-3 text-right font-medium text-app-secondary">操作</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-app-border">
-              {orders.map((order) => (
-                <tr key={order.id} className="hover:bg-neutral-50">
-                  <td className="px-6 py-3 font-mono text-xs">{order.trackingToken}</td>
-                  <td className="px-6 py-3">
-                    <StatusBadge status={order.status} />
-                  </td>
-                  <td className="px-6 py-3 text-app-secondary">
-                    {order.completedBy?.displayName ?? '-'}
-                  </td>
-                  <td className="px-6 py-3 text-app-secondary">
-                    {new Date(order.createdAt).toLocaleString('zh-CN')}
-                  </td>
-                  <td className="px-6 py-3 text-app-secondary">
-                    {order.completedAt
-                      ? new Date(order.completedAt).toLocaleString('zh-CN')
-                      : '-'}
-                  </td>
-                  <td className="px-6 py-3 text-right">
-                    {order.status === 'PENDING_PAYMENT' && (
-                      <button
-                        onClick={() => handleCancel(order.id)}
-                        className="p-1 text-gray-400 hover:text-red-600"
-                        title="取消订单"
-                      >
-                        <XCircle size={16} />
-                      </button>
-                    )}
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="min-w-[760px] w-full text-sm">
+              <thead className="bg-neutral-50">
+                <tr>
+                  <th className="px-6 py-3 text-left font-medium text-app-secondary">追踪码</th>
+                  <th className="px-6 py-3 text-left font-medium text-app-secondary">状态</th>
+                  <th className="px-6 py-3 text-left font-medium text-app-secondary">工人</th>
+                  <th className="px-6 py-3 text-left font-medium text-app-secondary">创建时间</th>
+                  <th className="px-6 py-3 text-left font-medium text-app-secondary">完成时间</th>
+                  <th className="px-6 py-3 text-right font-medium text-app-secondary">操作</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-app-border">
+                {orders.map((order) => (
+                  <tr key={order.id} className="hover:bg-neutral-50">
+                    <td className="px-6 py-3 font-mono text-xs">{order.trackingToken}</td>
+                    <td className="px-6 py-3">
+                      <StatusBadge status={order.status} />
+                    </td>
+                    <td className="px-6 py-3 text-app-secondary">
+                      {order.completedBy?.displayName ?? '-'}
+                    </td>
+                    <td className="px-6 py-3 text-app-secondary">
+                      {new Date(order.createdAt).toLocaleString('zh-CN')}
+                    </td>
+                    <td className="px-6 py-3 text-app-secondary">
+                      {order.completedAt
+                        ? new Date(order.completedAt).toLocaleString('zh-CN')
+                        : '-'}
+                    </td>
+                    <td className="px-6 py-3 text-right">
+                      {order.status === 'PENDING_PAYMENT' && (
+                        <button
+                          onClick={() => handleCancel(order.id)}
+                          className="p-1 text-gray-400 hover:text-red-600"
+                          title="取消订单"
+                        >
+                          <XCircle size={16} />
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
 
         {totalPages > 1 && (
-          <div className="flex justify-center gap-2 border-t border-app-border px-6 py-4">
+          <div className="flex flex-wrap justify-center gap-2 border-t border-app-border px-4 py-4 sm:px-6">
             {Array.from({ length: Math.min(totalPages, 10) }, (_, i) => i + 1).map((p) => (
               <button
                 key={p}

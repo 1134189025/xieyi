@@ -111,10 +111,10 @@ export default function TrackOrderPage() {
     <div className="checkout-shell">
       <div className="checkout-container">
         <div className="checkout-content">
-          <div className="checkout-brand-row">
-            <div>
+          <div className="checkout-brand-row flex-col items-start sm:flex-row sm:items-center">
+            <div className="min-w-0">
               <h1 className="checkout-title">{isPending ? '等待 Pix 付款' : '订单状态'}</h1>
-              <p className="mt-2 font-mono text-xs text-app-secondary">{order.trackingToken}</p>
+              <p className="mt-2 break-all font-mono text-xs text-app-secondary">{order.trackingToken}</p>
             </div>
             <StatusBadge status={order.status} />
           </div>

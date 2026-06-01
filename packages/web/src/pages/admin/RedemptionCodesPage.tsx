@@ -101,10 +101,10 @@ export default function RedemptionCodesPage() {
     <Layout>
       <h2 className="mb-6 text-2xl font-bold text-app-primary">兑换码管理</h2>
 
-      <div className="mb-6 rounded-xl border border-app-border bg-app-surface p-6 shadow-checkout">
+      <div className="mb-6 rounded-xl border border-app-border bg-app-surface p-4 shadow-checkout sm:p-6">
         <h3 className="text-lg font-semibold mb-4">生成兑换码</h3>
         <div className="flex flex-wrap gap-4 items-end">
-          <div>
+          <div className="w-full sm:w-auto">
             <label className="mb-1 block text-sm text-app-secondary">数量</label>
             <input
               type="number"
@@ -112,30 +112,30 @@ export default function RedemptionCodesPage() {
               max={500}
               value={count}
               onChange={(e) => setCount(Number(e.target.value))}
-              className="w-24 rounded-lg border border-app-border px-3 py-2 outline-none focus:border-app-accent"
+              className="w-full rounded-lg border border-app-border px-3 py-2 outline-none focus:border-app-accent sm:w-24"
             />
           </div>
-          <div>
+          <div className="w-full sm:w-auto">
             <label className="mb-1 block text-sm text-app-secondary">批次标签（可选）</label>
             <input
               type="text"
               value={batchLabel}
               onChange={(e) => setBatchLabel(e.target.value)}
               placeholder="例如 batch-001"
-              className="w-48 rounded-lg border border-app-border px-3 py-2 outline-none focus:border-app-accent"
+              className="w-full rounded-lg border border-app-border px-3 py-2 outline-none focus:border-app-accent sm:w-48"
             />
           </div>
           <button
             onClick={handleGenerate}
             disabled={generating}
-            className="flex items-center gap-2 rounded-lg bg-app-accent px-4 py-2 text-white hover:bg-app-accentHover disabled:opacity-50"
+            className="flex w-full items-center justify-center gap-2 rounded-lg bg-app-accent px-4 py-2 text-white hover:bg-app-accentHover disabled:opacity-50 sm:w-auto"
           >
             {generating ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
             生成
           </button>
           <button
             onClick={handleCopyAll}
-            className="flex items-center gap-2 rounded-lg bg-neutral-100 px-4 py-2 text-app-primary hover:bg-neutral-200"
+            className="flex w-full items-center justify-center gap-2 rounded-lg bg-neutral-100 px-4 py-2 text-app-primary hover:bg-neutral-200 sm:w-auto"
           >
             <Copy size={16} />
             复制本页未使用兑换码
@@ -144,7 +144,7 @@ export default function RedemptionCodesPage() {
       </div>
 
       <div className="overflow-hidden rounded-xl border border-app-border bg-app-surface shadow-checkout">
-        <div className="flex items-center gap-4 border-b border-app-border px-6 py-4">
+        <div className="flex flex-wrap items-center gap-3 border-b border-app-border px-4 py-4 sm:gap-4 sm:px-6">
           <span className="text-sm text-app-secondary">筛选：</span>
           {(['all', 'unused', 'used'] as const).map((f) => (
             <button
@@ -157,7 +157,7 @@ export default function RedemptionCodesPage() {
               {f === 'all' ? '全部' : f === 'unused' ? '未使用' : '已使用'}
             </button>
           ))}
-          <span className="ml-auto text-sm text-app-secondary">共 {total} 条</span>
+          <span className="w-full text-sm text-app-secondary sm:ml-auto sm:w-auto">共 {total} 条</span>
         </div>
 
         {loading ? (
@@ -167,61 +167,63 @@ export default function RedemptionCodesPage() {
         ) : error ? (
           <div className="py-10 text-center text-app-secondary">{error}</div>
         ) : (
-          <table className="w-full text-sm">
-            <thead className="bg-neutral-50">
-              <tr>
-                <th className="px-6 py-3 text-left font-medium text-app-secondary">兑换码</th>
-                <th className="px-6 py-3 text-left font-medium text-app-secondary">批次</th>
-                <th className="px-6 py-3 text-left font-medium text-app-secondary">状态</th>
-                <th className="px-6 py-3 text-left font-medium text-app-secondary">创建时间</th>
-                <th className="px-6 py-3 text-right font-medium text-app-secondary">操作</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-app-border">
-              {codes.map((code) => (
-                <tr key={code.id} className="hover:bg-neutral-50">
-                  <td className="px-6 py-3 font-mono font-medium">{code.code}</td>
-                  <td className="px-6 py-3 text-app-secondary">{code.batchLabel ?? '-'}</td>
-                  <td className="px-6 py-3">
-                    {code.usedAt ? (
-                      <span className="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded-full">
-                        已使用 {code.order ? `（${orderStatusLabel(code.order.status)}）` : ''}
-                      </span>
-                    ) : (
-                      <span className="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">
-                        可用
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-6 py-3 text-app-secondary">
-                    {new Date(code.createdAt).toLocaleString('zh-CN')}
-                  </td>
-                  <td className="px-6 py-3 text-right space-x-2">
-                    <button
-                      onClick={() => handleCopy(code.code)}
-                      className="p-1 text-gray-400 hover:text-app-primary"
-                      title="复制"
-                    >
-                      <Copy size={14} />
-                    </button>
-                    {!code.usedAt && (
-                      <button
-                        onClick={() => handleDelete(code.id)}
-                        className="p-1 text-gray-400 hover:text-red-600"
-                        title="删除"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    )}
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="min-w-[720px] w-full text-sm">
+              <thead className="bg-neutral-50">
+                <tr>
+                  <th className="px-6 py-3 text-left font-medium text-app-secondary">兑换码</th>
+                  <th className="px-6 py-3 text-left font-medium text-app-secondary">批次</th>
+                  <th className="px-6 py-3 text-left font-medium text-app-secondary">状态</th>
+                  <th className="px-6 py-3 text-left font-medium text-app-secondary">创建时间</th>
+                  <th className="px-6 py-3 text-right font-medium text-app-secondary">操作</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-app-border">
+                {codes.map((code) => (
+                  <tr key={code.id} className="hover:bg-neutral-50">
+                    <td className="px-6 py-3 font-mono font-medium">{code.code}</td>
+                    <td className="px-6 py-3 text-app-secondary">{code.batchLabel ?? '-'}</td>
+                    <td className="px-6 py-3">
+                      {code.usedAt ? (
+                        <span className="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded-full">
+                          已使用 {code.order ? `（${orderStatusLabel(code.order.status)}）` : ''}
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">
+                          可用
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-6 py-3 text-app-secondary">
+                      {new Date(code.createdAt).toLocaleString('zh-CN')}
+                    </td>
+                    <td className="px-6 py-3 text-right space-x-2">
+                      <button
+                        onClick={() => handleCopy(code.code)}
+                        className="p-1 text-gray-400 hover:text-app-primary"
+                        title="复制"
+                      >
+                        <Copy size={14} />
+                      </button>
+                      {!code.usedAt && (
+                        <button
+                          onClick={() => handleDelete(code.id)}
+                          className="p-1 text-gray-400 hover:text-red-600"
+                          title="删除"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
 
         {totalPages > 1 && (
-          <div className="flex justify-center gap-2 border-t border-app-border px-6 py-4">
+          <div className="flex flex-wrap justify-center gap-2 border-t border-app-border px-4 py-4 sm:px-6">
             {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => (
               <button
                 key={p}

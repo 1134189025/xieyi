@@ -70,11 +70,11 @@ export default function WorkerManagementPage() {
 
   return (
     <Layout>
-      <div className="flex justify-between items-center mb-6">
+      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <h2 className="text-2xl font-bold text-app-primary">工人管理</h2>
         <button
           onClick={() => setShowForm(!showForm)}
-          className="flex items-center gap-2 rounded-lg bg-app-accent px-4 py-2 text-white hover:bg-app-accentHover"
+          className="flex w-full items-center justify-center gap-2 rounded-lg bg-app-accent px-4 py-2 text-white hover:bg-app-accentHover sm:w-auto"
         >
           <Plus size={16} />
           添加工人
@@ -82,20 +82,20 @@ export default function WorkerManagementPage() {
       </div>
 
       {showForm && (
-        <div className="mb-6 rounded-xl border border-app-border bg-app-surface p-6 shadow-checkout">
+        <div className="mb-6 rounded-xl border border-app-border bg-app-surface p-4 shadow-checkout sm:p-6">
           <h3 className="text-lg font-semibold mb-4">新建工人</h3>
           <form onSubmit={handleCreate} className="flex flex-wrap gap-4 items-end">
-            <div>
+            <div className="w-full sm:w-auto">
               <label className="mb-1 block text-sm text-app-secondary">用户名</label>
               <input
                 type="text"
                 required
                 value={formData.username}
                 onChange={(e) => setFormData((p) => ({ ...p, username: e.target.value }))}
-                className="w-48 rounded-lg border border-app-border px-3 py-2 outline-none focus:border-app-accent"
+                className="w-full rounded-lg border border-app-border px-3 py-2 outline-none focus:border-app-accent sm:w-48"
               />
             </div>
-            <div>
+            <div className="w-full sm:w-auto">
               <label className="mb-1 block text-sm text-app-secondary">密码</label>
               <input
                 type="password"
@@ -103,23 +103,23 @@ export default function WorkerManagementPage() {
                 minLength={6}
                 value={formData.password}
                 onChange={(e) => setFormData((p) => ({ ...p, password: e.target.value }))}
-                className="w-48 rounded-lg border border-app-border px-3 py-2 outline-none focus:border-app-accent"
+                className="w-full rounded-lg border border-app-border px-3 py-2 outline-none focus:border-app-accent sm:w-48"
               />
             </div>
-            <div>
+            <div className="w-full sm:w-auto">
               <label className="mb-1 block text-sm text-app-secondary">显示名称</label>
               <input
                 type="text"
                 value={formData.displayName}
                 onChange={(e) => setFormData((p) => ({ ...p, displayName: e.target.value }))}
-                className="w-48 rounded-lg border border-app-border px-3 py-2 outline-none focus:border-app-accent"
+                className="w-full rounded-lg border border-app-border px-3 py-2 outline-none focus:border-app-accent sm:w-48"
                 placeholder="可选"
               />
             </div>
             <button
               type="submit"
               disabled={creating}
-              className="rounded-lg bg-app-accent px-4 py-2 text-white hover:bg-app-accentHover disabled:opacity-50"
+              className="w-full rounded-lg bg-app-accent px-4 py-2 text-white hover:bg-app-accentHover disabled:opacity-50 sm:w-auto"
             >
               {creating ? '正在创建...' : '创建'}
             </button>
@@ -135,50 +135,52 @@ export default function WorkerManagementPage() {
         ) : error ? (
           <div className="py-10 text-center text-app-secondary">{error}</div>
         ) : (
-          <table className="w-full text-sm">
-            <thead className="bg-neutral-50">
-              <tr>
-                <th className="px-6 py-3 text-left font-medium text-app-secondary">用户名</th>
-                <th className="px-6 py-3 text-left font-medium text-app-secondary">显示名称</th>
-                <th className="px-6 py-3 text-left font-medium text-app-secondary">完成订单</th>
-                <th className="px-6 py-3 text-left font-medium text-app-secondary">状态</th>
-                <th className="px-6 py-3 text-left font-medium text-app-secondary">创建时间</th>
-                <th className="px-6 py-3 text-right font-medium text-app-secondary">操作</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-app-border">
-              {workers.map((worker) => (
-                <tr key={worker.id} className="hover:bg-neutral-50">
-                  <td className="px-6 py-3 font-medium">{worker.username}</td>
-                  <td className="px-6 py-3 text-app-secondary">{worker.displayName ?? '-'}</td>
-                  <td className="px-6 py-3">
-                    <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-xs text-app-primary">
-                      {worker.completedOrderCount}
-                    </span>
-                  </td>
-                  <td className="px-6 py-3">
-                    {worker.enabled ? (
-                      <span className="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">启用</span>
-                    ) : (
-                      <span className="px-2 py-0.5 text-xs bg-red-100 text-red-700 rounded-full">禁用</span>
-                    )}
-                  </td>
-                  <td className="px-6 py-3 text-app-secondary">
-                    {new Date(worker.createdAt).toLocaleDateString('zh-CN')}
-                  </td>
-                  <td className="px-6 py-3 text-right">
-                    <button
-                      onClick={() => handleToggle(worker)}
-                      className={`p-1 ${worker.enabled ? 'text-red-400 hover:text-red-600' : 'text-green-400 hover:text-green-600'}`}
-                      title={worker.enabled ? '禁用' : '启用'}
-                    >
-                      {worker.enabled ? <UserX size={16} /> : <Shield size={16} />}
-                    </button>
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="min-w-[720px] w-full text-sm">
+              <thead className="bg-neutral-50">
+                <tr>
+                  <th className="px-6 py-3 text-left font-medium text-app-secondary">用户名</th>
+                  <th className="px-6 py-3 text-left font-medium text-app-secondary">显示名称</th>
+                  <th className="px-6 py-3 text-left font-medium text-app-secondary">完成订单</th>
+                  <th className="px-6 py-3 text-left font-medium text-app-secondary">状态</th>
+                  <th className="px-6 py-3 text-left font-medium text-app-secondary">创建时间</th>
+                  <th className="px-6 py-3 text-right font-medium text-app-secondary">操作</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-app-border">
+                {workers.map((worker) => (
+                  <tr key={worker.id} className="hover:bg-neutral-50">
+                    <td className="px-6 py-3 font-medium">{worker.username}</td>
+                    <td className="px-6 py-3 text-app-secondary">{worker.displayName ?? '-'}</td>
+                    <td className="px-6 py-3">
+                      <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-xs text-app-primary">
+                        {worker.completedOrderCount}
+                      </span>
+                    </td>
+                    <td className="px-6 py-3">
+                      {worker.enabled ? (
+                        <span className="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">启用</span>
+                      ) : (
+                        <span className="px-2 py-0.5 text-xs bg-red-100 text-red-700 rounded-full">禁用</span>
+                      )}
+                    </td>
+                    <td className="px-6 py-3 text-app-secondary">
+                      {new Date(worker.createdAt).toLocaleDateString('zh-CN')}
+                    </td>
+                    <td className="px-6 py-3 text-right">
+                      <button
+                        onClick={() => handleToggle(worker)}
+                        className={`p-1 ${worker.enabled ? 'text-red-400 hover:text-red-600' : 'text-green-400 hover:text-green-600'}`}
+                        title={worker.enabled ? '禁用' : '启用'}
+                      >
+                        {worker.enabled ? <UserX size={16} /> : <Shield size={16} />}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
     </Layout>
