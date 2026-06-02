@@ -36,6 +36,7 @@ vi.mock('../ws/index.ts', () => ({
 const {
   createOrder,
   completeOrder,
+  failCreatingPaymentOrder,
   getAdminOrders,
   getOrderByTrackingToken,
   getWorkerSummary,
@@ -167,6 +168,68 @@ describe('order.service', () => {
         secondsPerOrder: 300,
         calculationSource: 'generation_queue',
       },
+    });
+  });
+
+  it('stores a safe customer failure message when Pix generation fails with account not eligible', async () => {
+    const failedOrder = {
+      id: 'order-1',
+      trackingToken: 'track-1',
+      status: 'FAILED',
+      generationErrorCode: 'ACCOUNT_NOT_ELIGIBLE',
+      errorMessage: '账号无资格，无法生成 Pix 支付，请更换账号后重新提交。',
+      completedAt: null,
+      createdAt: new Date('2026-06-01T00:00:00.000Z'),
+    };
+    prisma.order.findUnique.mockResolvedValue(failedOrder);
+
+    await failCreatingPaymentOrder('order-1', 'ACCOUNT_NOT_ELIGIBLE');
+
+    expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+    expect(prisma.$executeRaw.mock.calls[0]).toContain('ACCOUNT_NOT_ELIGIBLE');
+    expect(prisma.$executeRaw.mock.calls[0]).toContain('账号无资格，无法生成 Pix 支付，请更换账号后重新提交。');
+    expect(broadcastOrderStatusChange).toHaveBeenCalledWith(failedOrder);
+  });
+
+  it('returns a safe customer failure message based on generation error code', async () => {
+    prisma.order.findUnique.mockResolvedValue({
+      id: 'order-1',
+      trackingToken: 'track-1',
+      status: 'FAILED',
+      pixCode: null,
+      pixQrPng: null,
+      pixExpiresAt: null,
+      pixImageUrl: null,
+      completedAt: null,
+      createdAt: new Date('2026-06-01T00:00:00.000Z'),
+      generationErrorCode: 'ACCOUNT_NOT_ELIGIBLE',
+      errorMessage: '支付创建失败，请稍后重试。',
+    });
+
+    await expect(getOrderByTrackingToken('track-1')).resolves.toMatchObject({
+      status: 'FAILED',
+      errorMessage: '账号无资格，无法生成 Pix 支付，请更换账号后重新提交。',
+    });
+  });
+
+  it('falls back to the generic customer failure message for unknown generation errors', async () => {
+    prisma.order.findUnique.mockResolvedValue({
+      id: 'order-1',
+      trackingToken: 'track-1',
+      status: 'FAILED',
+      pixCode: null,
+      pixQrPng: null,
+      pixExpiresAt: null,
+      pixImageUrl: null,
+      completedAt: null,
+      createdAt: new Date('2026-06-01T00:00:00.000Z'),
+      generationErrorCode: 'UNKNOWN_UPSTREAM_ERROR',
+      errorMessage: 'raw internal message',
+    });
+
+    await expect(getOrderByTrackingToken('track-1')).resolves.toMatchObject({
+      status: 'FAILED',
+      errorMessage: '支付创建失败，请稍后重试。',
     });
   });
 

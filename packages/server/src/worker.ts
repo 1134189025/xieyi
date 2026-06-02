@@ -14,7 +14,7 @@ async function startWorker() {
   });
 
   worker.on('completed', (job) => {
-    console.log(`Pix generation job completed order=${job.data.orderId}`);
+    console.log(`Pix generation job lifecycle completed order=${job.data.orderId}`);
   });
   worker.on('failed', (job, error) => {
     const orderId = job?.data.orderId ?? 'unknown';

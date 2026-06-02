@@ -63,6 +63,14 @@ function creatingOrder(queueEstimate: unknown) {
   };
 }
 
+function failedOrder(errorMessage: string | null) {
+  return {
+    ...creatingOrder(null),
+    status: 'FAILED',
+    errorMessage,
+  };
+}
+
 function renderTrackOrderPage() {
   const container = document.createElement('div');
   document.body.appendChild(container);
@@ -209,5 +217,32 @@ describe('TrackOrderPage', () => {
     expect(publicApi.get).toHaveBeenCalledTimes(2);
     expect(container.querySelector('.success-icon')).not.toBeNull();
     expect(container.querySelector<HTMLInputElement>('input[readonly]')).toBeNull();
+  });
+
+  it('shows the safe failure reason returned by the tracking API', async () => {
+    (publicApi.get as Mock).mockResolvedValue({
+      data: failedOrder('账号无资格，无法生成 Pix 支付，请更换账号后重新提交。'),
+    });
+
+    const { container, root } = renderTrackOrderPage();
+    mountedRoot = root;
+    await flushAsyncWork();
+
+    expect(container.textContent).toContain('订单失败');
+    expect(container.textContent).toContain('账号无资格，无法生成 Pix 支付，请更换账号后重新提交。');
+  });
+
+  it('keeps the failed order view stable when no failure reason is returned', async () => {
+    (publicApi.get as Mock).mockResolvedValue({
+      data: failedOrder(null),
+    });
+
+    const { container, root } = renderTrackOrderPage();
+    mountedRoot = root;
+    await flushAsyncWork();
+
+    expect(container.textContent).toContain('订单失败');
+    expect(container.textContent).not.toContain('undefined');
+    expect(container.textContent).not.toContain('null');
   });
 });
