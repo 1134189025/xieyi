@@ -16,10 +16,8 @@ const CHECKOUT_PAYLOAD = {
 };
 
 const DEFAULT_TIMEOUT_MS = 30_000;
-const SESSION_COOKIE_NAME = '__Secure-next-auth.session-token';
 const SESSION_UNRECOGNIZED_MESSAGE =
-  '无法识别 ChatGPT Session，请粘贴完整 session JSON、accessToken 或 session cookie';
-const SESSION_FAILED_MESSAGE = '无法验证 ChatGPT Session，请稍后重试';
+  '无法识别 ChatGPT Session，请粘贴 accessToken，或包含 accessToken/access_token/at 的 session JSON';
 const CHECKOUT_FAILED_MESSAGE = '无法创建 ChatGPT 结算链接，请稍后重试';
 const UPSTREAM_TIMEOUT_MESSAGE = '外部服务请求超时，请稍后重试';
 
@@ -35,8 +33,7 @@ export interface UpstreamRequestOptions {
 }
 
 export type ChatGptSessionCredential =
-  | { kind: 'access_token'; accessToken: string }
-  | { kind: 'session_token'; sessionToken: string };
+  { kind: 'access_token'; accessToken: string };
 
 export function isAccessToken(session: string): boolean {
   return isCompactJwt(session.trim());
@@ -49,49 +46,11 @@ export function parseChatGptSessionInput(input: string): ChatGptSessionCredentia
   const jsonCredential = parseJsonSessionCredential(sessionInput);
   if (jsonCredential) return jsonCredential;
 
-  const cookieSessionToken = extractSessionCookie(sessionInput);
-  if (cookieSessionToken) {
-    return { kind: 'session_token', sessionToken: cookieSessionToken };
-  }
-
   if (isCompactJwt(sessionInput)) {
     return { kind: 'access_token', accessToken: sessionInput };
   }
 
-  if (isCompactJwe(sessionInput) || isBareSessionToken(sessionInput)) {
-    return { kind: 'session_token', sessionToken: sessionInput };
-  }
-
   throw unrecognizedSessionError();
-}
-
-export async function resolveAccessToken(
-  session: string | ChatGptSessionCredential,
-  requestOptions: number | UpstreamRequestOptions = DEFAULT_TIMEOUT_MS,
-): Promise<string> {
-  const credential = typeof session === 'string' ? parseChatGptSessionInput(session) : session;
-  if (credential.kind === 'access_token') {
-    return credential.accessToken;
-  }
-  const options = normalizeRequestOptions(requestOptions);
-
-  const response = await fetchWithTimeout('https://chatgpt.com/api/auth/session', {
-    headers: {
-      cookie: `${SESSION_COOKIE_NAME}=${credential.sessionToken}`,
-      'user-agent': USER_AGENT,
-    },
-  }, options);
-
-  if (!response.ok) {
-    throw new AppError(502, SESSION_FAILED_MESSAGE, 'CHATGPT_SESSION_FAILED');
-  }
-
-  const data = (await response.json()) as Record<string, unknown>;
-  if (typeof data.accessToken !== 'string' || !data.accessToken) {
-    throw new AppError(502, SESSION_FAILED_MESSAGE, 'CHATGPT_SESSION_FAILED');
-  }
-
-  return data.accessToken;
 }
 
 function parseJsonSessionCredential(input: string): ChatGptSessionCredential | null {
@@ -106,62 +65,21 @@ function parseJsonSessionCredential(input: string): ChatGptSessionCredential | n
 
   if (!isRecord(parsed)) throw unrecognizedSessionError();
 
-  const accessToken = readNonEmptyString(parsed.accessToken);
-  if (accessToken && isCompactJwt(accessToken)) {
-    return { kind: 'access_token', accessToken };
-  }
-
-  const sessionToken = readNonEmptyString(parsed.sessionToken);
-  if (sessionToken && (isCompactJwe(sessionToken) || isBareSessionToken(sessionToken))) {
-    return { kind: 'session_token', sessionToken };
+  for (const fieldName of ['accessToken', 'access_token', 'at']) {
+    const accessToken = readNonEmptyString(parsed[fieldName]);
+    if (!accessToken) continue;
+    if (isCompactJwt(accessToken)) {
+      return { kind: 'access_token', accessToken };
+    }
+    throw unrecognizedSessionError();
   }
 
   throw unrecognizedSessionError();
 }
 
-function extractSessionCookie(input: string): string | null {
-  const cookieHeader = input.replace(/^cookie:\s*/i, '');
-  for (const cookiePart of cookieHeader.split(';')) {
-    const separatorIndex = cookiePart.indexOf('=');
-    if (separatorIndex === -1) continue;
-
-    const name = cookiePart.slice(0, separatorIndex).trim();
-    if (name !== SESSION_COOKIE_NAME) continue;
-
-    const value = cookiePart.slice(separatorIndex + 1).trim();
-    return value ? safeDecodeURIComponent(value) : null;
-  }
-
-  return null;
-}
-
-function safeDecodeURIComponent(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-}
-
 function isCompactJwt(value: string): boolean {
   const parts = value.split('.');
   return value.startsWith('eyJ') && parts.length === 3 && parts.every((part) => part.length > 0);
-}
-
-function isCompactJwe(value: string): boolean {
-  const parts = value.split('.');
-  return (
-    value.startsWith('eyJ') &&
-    parts.length === 5 &&
-    parts[0].length > 0 &&
-    parts[2].length > 0 &&
-    parts[3].length > 0 &&
-    parts[4].length > 0
-  );
-}
-
-function isBareSessionToken(value: string): boolean {
-  return value.length >= 20 && !/[\s{};]/.test(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

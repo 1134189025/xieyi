@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import api from '../../api/client';
 import Layout from '../../components/Layout';
+import { AUTO_REFRESH_INTERVAL_MS, useAutoRefresh } from '../../hooks/useAutoRefresh';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts';
@@ -43,18 +44,39 @@ interface ProxyHealthGroup {
   coolingDown: number;
 }
 
+interface FetchDashboardOptions {
+  silent?: boolean;
+}
+
 export default function AdminDashboard() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
+  const fetchDashboard = async (options: FetchDashboardOptions = {}) => {
+    if (!options.silent) {
+      setLoading(true);
+    }
+    try {
+      const res = await api.get('/admin/dashboard');
+      setData(res.data);
+      setError('');
+    } catch {
+      if (!options.silent) {
+        setError('看板数据加载失败');
+      }
+    } finally {
+      if (!options.silent) {
+        setLoading(false);
+      }
+    }
+  };
+
   useEffect(() => {
-    api
-      .get('/admin/dashboard')
-      .then((res) => setData(res.data))
-      .catch(() => setError('看板数据加载失败'))
-      .finally(() => setLoading(false));
+    void fetchDashboard();
   }, []);
+
+  useAutoRefresh(() => fetchDashboard({ silent: true }), AUTO_REFRESH_INTERVAL_MS);
 
   if (loading || !data) {
     return (

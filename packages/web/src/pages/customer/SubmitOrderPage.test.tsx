@@ -129,4 +129,17 @@ describe('SubmitOrderPage', () => {
       session: 'eyJhbGciOi.test.token',
     });
   });
+
+  it('输入提示只引导用户提交 accessToken 或包含 accessToken 的 JSON', () => {
+    const { container, root } = renderSubmitOrderPage();
+    mountedRoot = root;
+
+    const sessionTextarea = container.querySelector<HTMLTextAreaElement>('textarea');
+
+    expect(sessionTextarea).not.toBeNull();
+    expect(sessionTextarea!.placeholder).toContain('accessToken');
+    expect(sessionTextarea!.placeholder).toContain('access_token');
+    expect(sessionTextarea!.placeholder).toContain('at');
+    expect(sessionTextarea!.placeholder).not.toContain('session cookie');
+  });
 });

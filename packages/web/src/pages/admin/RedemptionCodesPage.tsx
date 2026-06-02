@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import api from '../../api/client';
 import Layout from '../../components/Layout';
+import { AUTO_REFRESH_INTERVAL_MS, useAutoRefresh } from '../../hooks/useAutoRefresh';
 import toast from 'react-hot-toast';
 import { Plus, Trash2, Copy, Loader2 } from 'lucide-react';
 import { orderStatusLabel } from '../../utils/labels';
@@ -14,6 +15,10 @@ interface CodeItem {
   order: { id: string; trackingToken: string; status: string } | null;
 }
 
+interface FetchCodesOptions {
+  silent?: boolean;
+}
+
 export default function RedemptionCodesPage() {
   const [codes, setCodes] = useState<CodeItem[]>([]);
   const [total, setTotal] = useState(0);
@@ -25,8 +30,10 @@ export default function RedemptionCodesPage() {
   const [batchLabel, setBatchLabel] = useState('');
   const [error, setError] = useState('');
 
-  const fetchCodes = async () => {
-    setLoading(true);
+  const fetchCodes = async (options: FetchCodesOptions = {}) => {
+    if (!options.silent) {
+      setLoading(true);
+    }
     try {
       const res = await api.get('/admin/redemption-codes', {
         params: { status: filter, page, limit: 20 },
@@ -35,15 +42,21 @@ export default function RedemptionCodesPage() {
       setTotal(res.data.total);
       setError('');
     } catch {
-      setError('兑换码列表加载失败');
+      if (!options.silent) {
+        setError('兑换码列表加载失败');
+      }
     } finally {
-      setLoading(false);
+      if (!options.silent) {
+        setLoading(false);
+      }
     }
   };
 
   useEffect(() => {
-    fetchCodes();
+    void fetchCodes();
   }, [page, filter]);
+
+  useAutoRefresh(() => fetchCodes({ silent: true }), AUTO_REFRESH_INTERVAL_MS);
 
   const handleGenerate = async () => {
     if (!Number.isInteger(count) || count < 1 || count > 500) {

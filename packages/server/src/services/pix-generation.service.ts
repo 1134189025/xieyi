@@ -1,4 +1,4 @@
-import { parseChatGptSessionInput, resolveAccessToken, createCheckoutUrl } from './chatgpt-session.service.ts';
+import { parseChatGptSessionInput, createCheckoutUrl } from './chatgpt-session.service.ts';
 import { generatePixPayment } from './pix-payment.service.ts';
 import {
   recordProxyFailure,
@@ -40,10 +40,11 @@ export async function processPixGenerationJob(input: ProcessPixGenerationJobInpu
   let stripeProxy: SelectedProxy | null = null;
 
   try {
+    const credential = parseChatGptSessionInput(decrypt(order.encryptedSessionData));
+
     chatGptProxy = await selectHealthyProxy('chatgpt');
     stripeProxy = await selectHealthyProxy('stripe');
 
-    const credential = parseChatGptSessionInput(decrypt(order.encryptedSessionData));
     const chatGptRequestOptions = {
       proxyUrl: chatGptProxy?.proxyUrl,
       retry: { attempts: 3 },
@@ -55,8 +56,7 @@ export async function processPixGenerationJob(input: ProcessPixGenerationJobInpu
 
     failedPoolName = 'chatgpt';
     failedProxy = chatGptProxy;
-    const accessToken = await resolveAccessToken(credential, chatGptRequestOptions);
-    const checkoutUrl = await createCheckoutUrl(accessToken, chatGptRequestOptions);
+    const checkoutUrl = await createCheckoutUrl(credential.accessToken, chatGptRequestOptions);
     await recordProxySuccess('chatgpt', chatGptProxy?.id ?? null);
 
     failedPoolName = 'stripe';

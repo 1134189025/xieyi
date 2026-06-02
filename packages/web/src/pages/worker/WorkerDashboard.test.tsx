@@ -160,6 +160,7 @@ describe('WorkerDashboard', () => {
   let mountedRoot: Root | null = null;
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.clearAllMocks();
     socketMock.reset();
     if (mountedRoot) {
@@ -304,5 +305,53 @@ describe('WorkerDashboard', () => {
 
     expect(api.post).not.toHaveBeenCalled();
     expect(container.querySelector('img[alt="Pix 二维码"]')).not.toBeNull();
+  });
+
+  it('silently refreshes worker orders and completion counters every 10 seconds', async () => {
+    vi.useFakeTimers();
+    let orderRequests = 0;
+    let summaryRequests = 0;
+    (api.get as Mock).mockImplementation((url: string) => {
+      if (url === '/worker/orders?limit=50') {
+        orderRequests += 1;
+        return Promise.resolve({
+          data: {
+            orders: [
+              orderRequests >= 2
+                ? workerOrder({ id: 'order-2', pixCode: 'pix-new', createdAt: '2026-06-01T00:02:00.000Z' })
+                : workerOrder({ id: 'order-1', pixCode: 'pix-old', createdAt: '2026-06-01T00:01:00.000Z' }),
+            ],
+          },
+        });
+      }
+      if (url === '/worker/summary') {
+        summaryRequests += 1;
+        return Promise.resolve({
+          data: summaryRequests >= 2
+            ? { completedTotal: 11, completedToday: 3, completedThisWeek: 6 }
+            : { completedTotal: 10, completedToday: 2, completedThisWeek: 5 },
+        });
+      }
+      return Promise.reject(new Error(`Unexpected GET ${url}`));
+    });
+
+    const { container, root } = renderWorkerDashboard();
+    mountedRoot = root;
+    await flushAsyncWork();
+
+    await clickButton(Array.from(container.querySelectorAll<HTMLButtonElement>('button'))[1]);
+    expect(readonlyInputValues(container)).toEqual(['pix-old']);
+
+    await act(async () => {
+      vi.advanceTimersByTime(10_000);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(readonlyInputValues(container)).toEqual(['pix-new']);
+    expect(container.textContent).toContain('11');
+    expect(container.textContent).toContain('3');
+    expect(container.textContent).toContain('6');
   });
 });

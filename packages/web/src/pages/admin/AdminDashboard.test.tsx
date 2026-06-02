@@ -46,6 +46,7 @@ describe('AdminDashboard', () => {
   let mountedRoot: Root | null = null;
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.clearAllMocks();
     if (mountedRoot) {
       act(() => mountedRoot?.unmount());
@@ -101,4 +102,61 @@ describe('AdminDashboard', () => {
     expect(container.textContent).toContain('Stripe 代理');
     expect(container.textContent).not.toContain('工人绩效');
   });
+
+  it('silently refreshes dashboard data every 10 seconds', async () => {
+    vi.useFakeTimers();
+    (api.get as Mock)
+      .mockResolvedValueOnce({ data: dashboardResponse({ totalOrders: 20, completedTotal: 9 }) })
+      .mockResolvedValueOnce({ data: dashboardResponse({ totalOrders: 21, completedTotal: 10 }) });
+
+    const { container, root } = await renderDashboard();
+    mountedRoot = root;
+
+    expect(api.get).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain('20');
+
+    await act(async () => {
+      vi.advanceTimersByTime(10_000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(api.get).toHaveBeenCalledTimes(2);
+    expect(container.textContent).toContain('21');
+    expect(container.textContent).toContain('10');
+  });
 });
+
+function dashboardResponse(overrides: Partial<{
+  totalOrders: number;
+  completedTotal: number;
+}> = {}) {
+  return {
+    totals: {
+      totalOrders: overrides.totalOrders ?? 20,
+      pendingOrders: 4,
+      completedTotal: overrides.completedTotal ?? 9,
+      completedToday: 2,
+      completedThisWeek: 5,
+      failedOrders: 1,
+      cancelledOrders: 1,
+      expiredOrders: 0,
+      totalCodes: 30,
+      unusedCodes: 12,
+    },
+    queue: {
+      waitingCount: 8,
+      delayedCount: 1,
+      activeCount: 2,
+      failedCount: 3,
+      oldestWaitingSeconds: 420,
+      averageGenerationSeconds: 180,
+      successRateLastHour: 75,
+    },
+    proxyHealth: {
+      chatGpt: { total: 3, healthy: 2, coolingDown: 1 },
+      stripe: { total: 4, healthy: 4, coolingDown: 0 },
+    },
+    dailyTrend: [],
+  };
+}

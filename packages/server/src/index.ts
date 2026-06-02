@@ -8,8 +8,7 @@ import { prisma } from './db.ts';
 import { errorHandler } from './middleware/error-handler.ts';
 import { setupWebSocket } from './ws/index.ts';
 import { seedAdmin } from './services/auth.service.ts';
-import { expirePendingOrders } from './services/order.service.ts';
-import { detectCompletedPixPayments } from './services/payment-status.service.ts';
+import { startPaymentMaintenanceLoop } from './services/payment-maintenance.service.ts';
 import authRoutes from './routes/auth.routes.ts';
 import orderRoutes from './routes/order.routes.ts';
 import workerRoutes from './routes/worker.routes.ts';
@@ -48,13 +47,7 @@ async function start() {
 
   await seedAdmin();
 
-  setInterval(() => {
-    detectCompletedPixPayments()
-      .catch(console.error)
-      .finally(() => {
-        expirePendingOrders().catch(console.error);
-      });
-  }, 60_000);
+  startPaymentMaintenanceLoop();
 
   httpServer.listen(config.port, () => {
     console.log(`Server running on http://localhost:${config.port}`);

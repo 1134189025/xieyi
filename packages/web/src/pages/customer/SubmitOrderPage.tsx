@@ -63,7 +63,7 @@ export default function SubmitOrderPage() {
 
           <h1 className="checkout-title">创建 Pix 支付订单</h1>
           <p className="checkout-lead">
-            输入兑换码和 ChatGPT Session，系统会验证资格并生成 Pix 二维码。
+            输入兑换码和 ChatGPT accessToken，系统会验证资格并生成 Pix 二维码。
           </p>
 
           <div className="checkout-field">
@@ -85,13 +85,13 @@ export default function SubmitOrderPage() {
 
           <div className="checkout-field">
             <label className="checkout-label" htmlFor="session">
-              ChatGPT Session
+              ChatGPT accessToken
             </label>
             <textarea
               id="session"
               value={session}
               onChange={(e) => setSession(e.target.value)}
-              placeholder="粘贴完整 session JSON、accessToken（3 段 eyJ...）或 session cookie"
+              placeholder="粘贴 accessToken，或包含 accessToken/access_token/at 的 session JSON"
               required
               rows={4}
               autoComplete="off"
@@ -120,7 +120,7 @@ export default function SubmitOrderPage() {
                 <polyline points="20 6 9 17 4 12" />
               </svg>
             </span>
-            <span>我确认已核对兑换码和 Session 信息，并同意继续创建支付订单。</span>
+            <span>我确认已核对兑换码和 accessToken 信息，并同意继续创建支付订单。</span>
           </label>
 
           {protocolError && (

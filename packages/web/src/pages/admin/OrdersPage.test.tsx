@@ -44,6 +44,7 @@ describe('OrdersPage', () => {
   let mountedRoot: Root | null = null;
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.clearAllMocks();
     if (mountedRoot) {
       act(() => mountedRoot?.unmount());
@@ -79,4 +80,60 @@ describe('OrdersPage', () => {
     expect(container.textContent).not.toContain('工人');
     expect(container.textContent).not.toContain('张三');
   });
+
+  it('silently refreshes the current orders page every 10 seconds', async () => {
+    vi.useFakeTimers();
+    (api.get as Mock)
+      .mockResolvedValueOnce({
+        data: {
+          orders: [orderResponse({ id: 'order-1', trackingToken: 'track-1', status: 'PENDING_PAYMENT' })],
+          total: 1,
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          orders: [orderResponse({
+            id: 'order-2',
+            trackingToken: 'track-2',
+            status: 'PAYMENT_COMPLETED',
+            completedAt: '2026-06-01T00:10:00.000Z',
+          })],
+          total: 1,
+        },
+      });
+
+    const { container, root } = await renderOrdersPage();
+    mountedRoot = root;
+
+    expect(container.textContent).toContain('track-1');
+
+    await act(async () => {
+      vi.advanceTimersByTime(10_000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(api.get).toHaveBeenCalledTimes(2);
+    expect(api.get).toHaveBeenLastCalledWith('/admin/orders', { params: { page: 1, limit: 20 } });
+    expect(container.textContent).toContain('track-2');
+    expect(container.textContent).not.toContain('track-1');
+  });
 });
+
+function orderResponse(overrides: Partial<{
+  id: string;
+  trackingToken: string;
+  status: string;
+  completedAt: string | null;
+}> = {}) {
+  return {
+    id: overrides.id ?? 'order-1',
+    trackingToken: overrides.trackingToken ?? 'track-1',
+    status: overrides.status ?? 'PAYMENT_COMPLETED',
+    pixCode: 'pix-code',
+    checkoutSessionId: 'cs_test_123',
+    errorMessage: null,
+    completedAt: overrides.completedAt ?? null,
+    createdAt: '2026-06-01T00:00:00.000Z',
+  };
+}

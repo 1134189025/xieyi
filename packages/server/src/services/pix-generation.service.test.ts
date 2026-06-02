@@ -10,7 +10,6 @@ const prisma = {
 
 const decrypt = vi.fn((ciphertext: string) => ciphertext.replace(/^encrypted:/, ''));
 const parseChatGptSessionInput = vi.fn();
-const resolveAccessToken = vi.fn();
 const createCheckoutUrl = vi.fn();
 const generatePixPayment = vi.fn();
 const selectHealthyProxy = vi.fn();
@@ -24,7 +23,6 @@ vi.mock('../db.ts', () => ({ prisma }));
 vi.mock('../utils/crypto.ts', () => ({ decrypt, encrypt: vi.fn((value: string) => `encrypted:${value}`) }));
 vi.mock('./chatgpt-session.service.ts', () => ({
   parseChatGptSessionInput,
-  resolveAccessToken,
   createCheckoutUrl,
 }));
 vi.mock('./pix-payment.service.ts', () => ({ generatePixPayment }));
@@ -41,7 +39,7 @@ const { processPixGenerationJob } = await import('./pix-generation.service.ts');
 describe('pix-generation.service', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    parseChatGptSessionInput.mockReturnValue({ kind: 'session_token', sessionToken: 'session-token-value' });
+    parseChatGptSessionInput.mockReturnValue({ kind: 'access_token', accessToken: 'access-token-value' });
     selectHealthyProxy
       .mockResolvedValueOnce({
         id: 'chatgpt-proxy-1',
@@ -53,7 +51,6 @@ describe('pix-generation.service', () => {
         proxyUrl: 'http://stripe:user@stripe-proxy.example:10001',
         maskedProxy: 'http://stripe:****@stripe-proxy.example:10001',
       });
-    resolveAccessToken.mockResolvedValue('access-token-value');
     createCheckoutUrl.mockResolvedValue('https://pay.openai.com/c/pay/cs_test_123');
     generatePixPayment.mockResolvedValue({
       stripeResult: {
@@ -73,7 +70,7 @@ describe('pix-generation.service', () => {
     prisma.order.updateMany.mockResolvedValue({ count: 1 });
   });
 
-  it('generates Pix for a queued order using separate ChatGPT and Stripe proxies', async () => {
+  it('generates Pix for a queued order using directly extracted accessToken and separate proxies', async () => {
     const queuedOrder = {
       id: 'order-1',
       trackingToken: 'track-1',
@@ -95,10 +92,7 @@ describe('pix-generation.service', () => {
 
     await processPixGenerationJob({ orderId: 'order-1', finalAttempt: false });
 
-    expect(resolveAccessToken).toHaveBeenCalledWith(
-      { kind: 'session_token', sessionToken: 'session-token-value' },
-      expect.objectContaining({ proxyUrl: 'http://chat:user@chat-proxy.example:10000' }),
-    );
+    expect(parseChatGptSessionInput).toHaveBeenCalledWith('session-token-value');
     expect(createCheckoutUrl).toHaveBeenCalledWith(
       'access-token-value',
       expect.objectContaining({ proxyUrl: 'http://chat:user@chat-proxy.example:10000' }),
@@ -134,13 +128,45 @@ describe('pix-generation.service', () => {
       createdAt: new Date('2026-06-01T00:00:00.000Z'),
     });
     const timeout = Object.assign(new Error('timeout'), { code: 'UPSTREAM_TIMEOUT' });
-    resolveAccessToken.mockRejectedValue(timeout);
+    createCheckoutUrl.mockRejectedValue(timeout);
     shouldCountProxyFailure.mockReturnValue(true);
 
     await expect(processPixGenerationJob({ orderId: 'order-1', finalAttempt: false })).rejects.toBe(timeout);
 
     expect(recordProxyFailure).toHaveBeenCalledWith('chatgpt', 'chatgpt-proxy-1', timeout);
     expect(prisma.$executeRaw).not.toHaveBeenCalled();
+  });
+
+  it('rejects unparseable session input before selecting proxies on the final attempt', async () => {
+    const failedOrder = {
+      id: 'order-1',
+      trackingToken: 'track-1',
+      status: 'FAILED',
+      completedAt: null,
+      createdAt: new Date('2026-06-01T00:00:00.000Z'),
+    };
+    prisma.order.findUnique
+      .mockResolvedValueOnce({
+        id: 'order-1',
+        trackingToken: 'track-1',
+        status: 'CREATING_PAYMENT',
+        encryptedSessionData: 'encrypted:legacy-session-cookie',
+        generationQueuedAt: new Date('2026-06-01T00:00:00.000Z'),
+        createdAt: new Date('2026-06-01T00:00:00.000Z'),
+      })
+      .mockResolvedValueOnce(failedOrder);
+    parseChatGptSessionInput.mockImplementation(() => {
+      throw Object.assign(new Error('bad session'), { code: 'CHATGPT_SESSION_UNRECOGNIZED' });
+    });
+
+    await processPixGenerationJob({ orderId: 'order-1', finalAttempt: true });
+
+    expect(selectHealthyProxy).not.toHaveBeenCalled();
+    expect(createCheckoutUrl).not.toHaveBeenCalled();
+    expect(generatePixPayment).not.toHaveBeenCalled();
+    expect(recordProxyFailure).not.toHaveBeenCalled();
+    expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+    expect(broadcastOrderStatusChange).toHaveBeenCalledWith(failedOrder);
   });
 
   it('marks the order failed and releases the code when generation fails on the final attempt', async () => {
