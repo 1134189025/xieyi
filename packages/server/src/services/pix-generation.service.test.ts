@@ -137,7 +137,26 @@ describe('pix-generation.service', () => {
     expect(prisma.$executeRaw).not.toHaveBeenCalled();
   });
 
-  it('rejects unparseable session input before selecting proxies on the final attempt', async () => {
+  it('retries ChatGPT checkout failures without releasing the code until the final attempt', async () => {
+    prisma.order.findUnique.mockResolvedValue({
+      id: 'order-1',
+      trackingToken: 'track-1',
+      status: 'CREATING_PAYMENT',
+      encryptedSessionData: 'encrypted:session-token-value',
+      generationQueuedAt: new Date('2026-06-01T00:00:00.000Z'),
+      createdAt: new Date('2026-06-01T00:00:00.000Z'),
+    });
+    const checkoutFailure = Object.assign(new Error('checkout failed'), { code: 'CHATGPT_CHECKOUT_FAILED' });
+    createCheckoutUrl.mockRejectedValue(checkoutFailure);
+    shouldCountProxyFailure.mockReturnValue(true);
+
+    await expect(processPixGenerationJob({ orderId: 'order-1', finalAttempt: false })).rejects.toBe(checkoutFailure);
+
+    expect(recordProxyFailure).toHaveBeenCalledWith('chatgpt', 'chatgpt-proxy-1', checkoutFailure);
+    expect(prisma.$executeRaw).not.toHaveBeenCalled();
+  });
+
+  it('rejects unparseable session input before selecting proxies without waiting for the final attempt', async () => {
     const failedOrder = {
       id: 'order-1',
       trackingToken: 'track-1',
@@ -159,7 +178,7 @@ describe('pix-generation.service', () => {
       throw Object.assign(new Error('bad session'), { code: 'CHATGPT_SESSION_UNRECOGNIZED' });
     });
 
-    await processPixGenerationJob({ orderId: 'order-1', finalAttempt: true });
+    await processPixGenerationJob({ orderId: 'order-1', finalAttempt: false });
 
     expect(selectHealthyProxy).not.toHaveBeenCalled();
     expect(createCheckoutUrl).not.toHaveBeenCalled();
@@ -194,6 +213,37 @@ describe('pix-generation.service', () => {
     shouldCountProxyFailure.mockReturnValue(false);
 
     await processPixGenerationJob({ orderId: 'order-1', finalAttempt: true });
+
+    expect(recordProxyFailure).not.toHaveBeenCalled();
+    expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+    expect(broadcastOrderStatusChange).toHaveBeenCalledWith(failedOrder);
+  });
+
+  it('marks account-not-eligible failures terminal without waiting for the final attempt', async () => {
+    const failedOrder = {
+      id: 'order-1',
+      trackingToken: 'track-1',
+      status: 'FAILED',
+      completedAt: null,
+      createdAt: new Date('2026-06-01T00:00:00.000Z'),
+    };
+    prisma.order.findUnique
+      .mockResolvedValueOnce({
+        id: 'order-1',
+        trackingToken: 'track-1',
+        status: 'CREATING_PAYMENT',
+        encryptedSessionData: 'encrypted:session-token-value',
+        generationQueuedAt: new Date('2026-06-01T00:00:00.000Z'),
+        createdAt: new Date('2026-06-01T00:00:00.000Z'),
+      })
+      .mockResolvedValueOnce(failedOrder);
+    generatePixPayment.mockRejectedValue(Object.assign(new Error('account not eligible'), {
+      statusCode: 400,
+      code: 'ACCOUNT_NOT_ELIGIBLE',
+    }));
+    shouldCountProxyFailure.mockReturnValue(false);
+
+    await processPixGenerationJob({ orderId: 'order-1', finalAttempt: false });
 
     expect(recordProxyFailure).not.toHaveBeenCalled();
     expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);

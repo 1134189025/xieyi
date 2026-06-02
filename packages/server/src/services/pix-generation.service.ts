@@ -14,6 +14,10 @@ import { broadcastOrderReady } from '../ws/index.ts';
 import { failCreatingPaymentOrder } from './order.service.ts';
 
 const SAFE_PAYMENT_ERROR_CODE = 'PAYMENT_FAILED';
+const TERMINAL_GENERATION_ERROR_CODES = new Set([
+  'ACCOUNT_NOT_ELIGIBLE',
+  'CHATGPT_SESSION_UNRECOGNIZED',
+]);
 
 interface ProcessPixGenerationJobInput {
   orderId: string;
@@ -99,15 +103,20 @@ export async function processPixGenerationJob(input: ProcessPixGenerationJobInpu
       await recordProxyFailure(failedPoolName, failedProxy?.id ?? null, error);
     }
 
-    if (!input.finalAttempt) {
+    const errorCode = publicGenerationErrorCode(error);
+    if (!input.finalAttempt && !isTerminalGenerationError(errorCode)) {
       throw error;
     }
 
-    await failCreatingPaymentOrder(input.orderId, publicGenerationErrorCode(error));
+    await failCreatingPaymentOrder(input.orderId, errorCode);
   }
 }
 
 function publicGenerationErrorCode(error: unknown): string {
   const code = (error as { code?: unknown }).code;
   return typeof code === 'string' ? code : SAFE_PAYMENT_ERROR_CODE;
+}
+
+function isTerminalGenerationError(errorCode: string): boolean {
+  return TERMINAL_GENERATION_ERROR_CODES.has(errorCode);
 }

@@ -13,7 +13,13 @@ import {
   secondsPerGenerationEstimate,
 } from '../queues/pix-generation.queue.ts';
 
-const SAFE_PAYMENT_ERROR_MESSAGE = '支付创建失败，请稍后重试';
+const SAFE_PAYMENT_ERROR_MESSAGE = '支付创建失败，请稍后重试。';
+const GENERATION_FAILURE_MESSAGES: Record<string, string> = {
+  ACCOUNT_NOT_ELIGIBLE: '账号无资格，无法生成 Pix 支付，请更换账号后重新提交。',
+  CHATGPT_SESSION_UNRECOGNIZED: 'accessToken 无法识别，请重新粘贴有效 accessToken。',
+  CHATGPT_CHECKOUT_FAILED: 'ChatGPT 结算链接创建失败，请稍后重试或更换账号。',
+  PAYMENT_FAILED: SAFE_PAYMENT_ERROR_MESSAGE,
+};
 const ORDER_CREATE_BUSY_MESSAGE = '订单创建繁忙，请稍后重试';
 const ORDER_QUEUE_UNAVAILABLE_MESSAGE = '订单排队失败，请稍后重试';
 const DEFAULT_QUEUE_SECONDS_PER_ORDER = 5 * 60;
@@ -168,6 +174,7 @@ async function releaseCreatingPaymentOrder(orderId: string) {
 
 export async function failCreatingPaymentOrder(orderId: string, errorCode: string) {
   const failedAt = new Date();
+  const safeFailureMessage = customerFailureMessage(errorCode);
   await prisma.$executeRaw`
     WITH target AS (
       SELECT "redemption_code_id"
@@ -180,7 +187,7 @@ export async function failCreatingPaymentOrder(orderId: string, errorCode: strin
         "status" = 'FAILED',
         "generation_finished_at" = ${failedAt},
         "generation_error_code" = ${errorCode},
-        "error_message" = ${SAFE_PAYMENT_ERROR_MESSAGE},
+        "error_message" = ${safeFailureMessage},
         "redemption_code_id" = NULL,
         "encrypted_session_data" = NULL,
         "updated_at" = NOW()
@@ -247,9 +254,14 @@ async function buildPublicOrderView(order: Order) {
     pixImageUrl: order.pixImageUrl,
     completedAt: order.completedAt?.toISOString() ?? null,
     createdAt: order.createdAt.toISOString(),
-    errorMessage: order.status === 'FAILED' ? SAFE_PAYMENT_ERROR_MESSAGE : null,
+    errorMessage: order.status === 'FAILED' ? customerFailureMessage((order as OrderWithGeneration).generationErrorCode) : null,
     queueEstimate: await safeCalculateQueueEstimate(order),
   };
+}
+
+function customerFailureMessage(errorCode: string | null | undefined): string {
+  if (!errorCode) return SAFE_PAYMENT_ERROR_MESSAGE;
+  return GENERATION_FAILURE_MESSAGES[errorCode] ?? SAFE_PAYMENT_ERROR_MESSAGE;
 }
 
 export async function getWorkerOrders(page: number, limit: number) {
