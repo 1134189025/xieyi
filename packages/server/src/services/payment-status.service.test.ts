@@ -176,4 +176,28 @@ describe('payment-status.service', () => {
 
     expect(recordProxyFailure).toHaveBeenCalledWith('stripe', 'stripe-proxy-1', timeout);
   });
+
+  it('skips overlapping automatic detection runs', async () => {
+    let resolveSetting!: (value: { enabled: boolean }) => void;
+    getAutoPaymentDetectionSetting.mockReturnValueOnce(new Promise((resolve) => {
+      resolveSetting = resolve;
+    }));
+
+    const firstRun = detectCompletedPixPayments();
+
+    await expect(detectCompletedPixPayments()).resolves.toEqual({
+      checked: 0,
+      completed: 0,
+      disabled: false,
+      skipped: true,
+    });
+
+    resolveSetting({ enabled: true });
+    await expect(firstRun).resolves.toEqual({
+      checked: 0,
+      completed: 0,
+      disabled: false,
+      skipped: false,
+    });
+  });
 });

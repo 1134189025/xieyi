@@ -4,7 +4,6 @@ import {
   createCheckoutUrl,
   isAccessToken,
   parseChatGptSessionInput,
-  resolveAccessToken,
 } from './chatgpt-session.service.ts';
 
 const ACCESS_TOKEN = 'eyJhbGciOiJSUzI1NiJ9.eyJhdWQiOiJodHRwcyJ9.signature';
@@ -15,13 +14,28 @@ describe('chatgpt-session.service', () => {
     vi.unstubAllGlobals();
   });
 
-  it('从完整 session JSON 中直接提取 accessToken', async () => {
+  it('从原始三段 JWT 中直接提取 accessToken，不请求 ChatGPT session 页面', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    expect(parseChatGptSessionInput(ACCESS_TOKEN)).toEqual({
+      kind: 'access_token',
+      accessToken: ACCESS_TOKEN,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['accessToken'],
+    ['access_token'],
+    ['at'],
+  ])('从完整 session JSON 顶层字段 %s 直接提取 accessToken', async (fieldName) => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
 
     const input = JSON.stringify({
       user: { email: 'customer@example.com' },
-      accessToken: ACCESS_TOKEN,
+      [fieldName]: ACCESS_TOKEN,
       sessionToken: SESSION_TOKEN,
     });
 
@@ -29,82 +43,37 @@ describe('chatgpt-session.service', () => {
       kind: 'access_token',
       accessToken: ACCESS_TOKEN,
     });
-    await expect(resolveAccessToken(input)).resolves.toBe(ACCESS_TOKEN);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('从只有 sessionToken 的 JSON 中提取 cookie 并换取 accessToken', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ accessToken: ACCESS_TOKEN }),
-    });
+  it('只有 sessionToken 的 JSON 返回稳定错误码且不请求 ChatGPT session 页面', () => {
+    const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
 
-    const input = JSON.stringify({ sessionToken: SESSION_TOKEN });
-
-    expect(parseChatGptSessionInput(input)).toEqual({
-      kind: 'session_token',
-      sessionToken: SESSION_TOKEN,
-    });
-    await expect(resolveAccessToken(input)).resolves.toBe(ACCESS_TOKEN);
-    expect(fetchMock).toHaveBeenCalledWith(
-      'https://chatgpt.com/api/auth/session',
-      expect.objectContaining({
-        headers: expect.objectContaining({
-          cookie: `__Secure-next-auth.session-token=${SESSION_TOKEN}`,
-        }),
-      }),
-    );
+    expect(() => parseChatGptSessionInput(JSON.stringify({ sessionToken: SESSION_TOKEN }))).toThrow(AppError);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('启用代理时 ChatGPT session 请求使用代理 dispatcher', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ accessToken: ACCESS_TOKEN }),
-    });
-    vi.stubGlobal('fetch', fetchMock);
-
-    await expect(
-      resolveAccessToken(JSON.stringify({ sessionToken: SESSION_TOKEN }), {
-        proxyUrl: 'http://user:pass@proxy.example:10000',
-      }),
-    ).resolves.toBe(ACCESS_TOKEN);
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      'https://chatgpt.com/api/auth/session',
-      expect.objectContaining({
-        dispatcher: expect.any(Object),
-      }),
-    );
-  });
-
-  it('ChatGPT session 响应缺少 accessToken 时返回稳定错误码', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ user: { id: 'u1' } }),
-    });
-    vi.stubGlobal('fetch', fetchMock);
-
-    await expect(resolveAccessToken(JSON.stringify({ sessionToken: SESSION_TOKEN }))).rejects.toMatchObject({
-      statusCode: 502,
-      code: 'CHATGPT_SESSION_FAILED',
-      message: '无法验证 ChatGPT Session，请稍后重试',
-    });
-  });
-
-  it('不会把 5 段 JWE sessionToken 误判为 accessToken', () => {
+  it('不会把 5 段 JWE sessionToken 误判为 accessToken，也不再接受为兼容输入', () => {
     expect(isAccessToken(SESSION_TOKEN)).toBe(false);
-    expect(parseChatGptSessionInput(SESSION_TOKEN)).toEqual({
-      kind: 'session_token',
-      sessionToken: SESSION_TOKEN,
-    });
+    expect(() => parseChatGptSessionInput(SESSION_TOKEN)).toThrow(AppError);
   });
 
-  it('从 cookie header 中提取 __Secure-next-auth.session-token', () => {
-    expect(parseChatGptSessionInput(`other=1; __Secure-next-auth.session-token=${SESSION_TOKEN}; Path=/`)).toEqual({
-      kind: 'session_token',
-      sessionToken: SESSION_TOKEN,
-    });
+  it('不再接受 cookie header 或 bare session token', () => {
+    expect(() => parseChatGptSessionInput(`other=1; __Secure-next-auth.session-token=${SESSION_TOKEN}; Path=/`)).toThrow(AppError);
+    expect(() => parseChatGptSessionInput('bare-session-token-value-12345')).toThrow(AppError);
+  });
+
+  it('JSON 中 accessToken 不是三段 JWT 时返回稳定错误码', () => {
+    expect(() => parseChatGptSessionInput(JSON.stringify({ accessToken: 'not-a-jwt' }))).toThrow(AppError);
+    try {
+      parseChatGptSessionInput(JSON.stringify({ accessToken: 'not-a-jwt' }));
+    } catch (error) {
+      expect(error).toMatchObject({
+        statusCode: 400,
+        code: 'CHATGPT_SESSION_UNRECOGNIZED',
+      });
+    }
   });
 
   it('无法识别的 JSON 返回稳定错误码', () => {

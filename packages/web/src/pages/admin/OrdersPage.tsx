@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import api from '../../api/client';
 import Layout from '../../components/Layout';
 import StatusBadge from '../../components/StatusBadge';
+import { AUTO_REFRESH_INTERVAL_MS, useAutoRefresh } from '../../hooks/useAutoRefresh';
 import toast from 'react-hot-toast';
 import { Loader2, XCircle } from 'lucide-react';
 import { orderStatusLabel, safeErrorMessage } from '../../utils/labels';
@@ -17,6 +18,10 @@ interface OrderItem {
   createdAt: string;
 }
 
+interface FetchOrdersOptions {
+  silent?: boolean;
+}
+
 export default function OrdersPage() {
   const [orders, setOrders] = useState<OrderItem[]>([]);
   const [total, setTotal] = useState(0);
@@ -25,8 +30,10 @@ export default function OrdersPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  const fetchOrders = async () => {
-    setLoading(true);
+  const fetchOrders = async (options: FetchOrdersOptions = {}) => {
+    if (!options.silent) {
+      setLoading(true);
+    }
     try {
       const params: Record<string, unknown> = { page, limit: 20 };
       if (statusFilter) params.status = statusFilter;
@@ -35,15 +42,21 @@ export default function OrdersPage() {
       setTotal(res.data.total);
       setError('');
     } catch {
-      setError('订单列表加载失败');
+      if (!options.silent) {
+        setError('订单列表加载失败');
+      }
     } finally {
-      setLoading(false);
+      if (!options.silent) {
+        setLoading(false);
+      }
     }
   };
 
   useEffect(() => {
-    fetchOrders();
+    void fetchOrders();
   }, [page, statusFilter]);
+
+  useAutoRefresh(() => fetchOrders({ silent: true }), AUTO_REFRESH_INTERVAL_MS);
 
   const handleCancel = async (orderId: string) => {
     if (!confirm('确认取消这个订单？')) return;

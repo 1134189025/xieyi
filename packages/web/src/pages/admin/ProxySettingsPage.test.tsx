@@ -64,6 +64,7 @@ describe('ProxySettingsPage', () => {
   let mountedRoot: Root | null = null;
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.clearAllMocks();
     if (mountedRoot) {
       act(() => mountedRoot?.unmount());
@@ -127,6 +128,62 @@ describe('ProxySettingsPage', () => {
     });
 
     expect(api.put).toHaveBeenCalledWith('/admin/settings/maintenance-mode', { enabled: true });
+  });
+
+  it('refreshes settings every 10 seconds without clearing edited proxy textareas', async () => {
+    vi.useFakeTimers();
+    mockSettingsResponse();
+    (api.get as Mock)
+      .mockResolvedValueOnce({
+        data: {
+          chatGpt: {
+            enabled: true,
+            proxies: [{
+              id: 'chat-2',
+              host: 'chat2.example',
+              port: 10002,
+              username: 'chat-user',
+              maskedProxy: 'http://chat-user:****@chat2.example:10002',
+              healthy: false,
+            }],
+          },
+          stripe: {
+            enabled: true,
+            proxies: [{
+              id: 'stripe-2',
+              host: 'stripe2.example',
+              port: 10003,
+              username: 'stripe-user',
+              maskedProxy: 'http://stripe-user:****@stripe2.example:10003',
+              healthy: true,
+            }],
+          },
+        },
+      })
+      .mockResolvedValueOnce({ data: { enabled: false } })
+      .mockResolvedValueOnce({ data: { enabled: true } });
+
+    const { container, root } = await renderSettingsPage();
+    mountedRoot = root;
+
+    const textareas = container.querySelectorAll<HTMLTextAreaElement>('textarea');
+    await act(async () => {
+      setTextareaValue(textareas[0], 'chat.example:10000:chat-user:chat-pass');
+      textareas[0].dispatchEvent(new Event('input', { bubbles: true }));
+      setTextareaValue(textareas[1], 'stripe.example:10001:stripe-user:stripe-pass');
+      textareas[1].dispatchEvent(new Event('input', { bubbles: true }));
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(10_000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(api.get).toHaveBeenCalledTimes(6);
+    expect(textareas[0].value).toBe('chat.example:10000:chat-user:chat-pass');
+    expect(textareas[1].value).toBe('stripe.example:10001:stripe-user:stripe-pass');
+    expect(container.textContent).toContain('http://chat-user:****@chat2.example:10002');
   });
 });
 

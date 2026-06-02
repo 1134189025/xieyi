@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import api from '../../api/client';
 import Layout from '../../components/Layout';
+import { AUTO_REFRESH_INTERVAL_MS, useAutoRefresh } from '../../hooks/useAutoRefresh';
 import toast from 'react-hot-toast';
 import { Plus, UserX, Loader2, Shield } from 'lucide-react';
 
@@ -12,6 +13,10 @@ interface WorkerItem {
   createdAt: string;
 }
 
+interface FetchWorkersOptions {
+  silent?: boolean;
+}
+
 export default function WorkerManagementPage() {
   const [workers, setWorkers] = useState<WorkerItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -20,21 +25,27 @@ export default function WorkerManagementPage() {
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState('');
 
-  const fetchWorkers = async () => {
+  const fetchWorkers = async (options: FetchWorkersOptions = {}) => {
     try {
       const res = await api.get('/admin/workers');
       setWorkers(res.data.workers);
       setError('');
     } catch {
-      setError('工人列表加载失败');
+      if (!options.silent) {
+        setError('工人列表加载失败');
+      }
     } finally {
-      setLoading(false);
+      if (!options.silent) {
+        setLoading(false);
+      }
     }
   };
 
   useEffect(() => {
-    fetchWorkers();
+    void fetchWorkers();
   }, []);
+
+  useAutoRefresh(() => fetchWorkers({ silent: true }), AUTO_REFRESH_INTERVAL_MS);
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();

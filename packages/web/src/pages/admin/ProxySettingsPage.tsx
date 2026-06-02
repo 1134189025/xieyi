@@ -3,6 +3,7 @@ import toast from 'react-hot-toast';
 import { Loader2, Save } from 'lucide-react';
 import api from '../../api/client';
 import Layout from '../../components/Layout';
+import { AUTO_REFRESH_INTERVAL_MS, useAutoRefresh } from '../../hooks/useAutoRefresh';
 import { safeErrorMessage } from '../../utils/labels';
 
 interface ProxySettings {
@@ -30,6 +31,10 @@ interface ToggleSetting {
   enabled: boolean;
 }
 
+interface FetchSettingsOptions {
+  silent?: boolean;
+}
+
 const EMPTY_PROXY_SETTINGS: ProxySettings = {
   chatGpt: { enabled: false, proxies: [] },
   stripe: { enabled: false, proxies: [] },
@@ -47,8 +52,10 @@ export default function ProxySettingsPage() {
   const [savingMaintenance, setSavingMaintenance] = useState(false);
   const [error, setError] = useState('');
 
-  const fetchSettings = async () => {
-    setLoading(true);
+  const fetchSettings = async (options: FetchSettingsOptions = {}) => {
+    if (!options.silent) {
+      setLoading(true);
+    }
     try {
       const [proxyResponse, autoDetectionResponse, maintenanceResponse] = await Promise.all([
         api.get('/admin/settings/proxy'),
@@ -60,15 +67,21 @@ export default function ProxySettingsPage() {
       setMaintenanceMode(maintenanceResponse.data);
       setError('');
     } catch {
-      setError('系统设置加载失败');
+      if (!options.silent) {
+        setError('系统设置加载失败');
+      }
     } finally {
-      setLoading(false);
+      if (!options.silent) {
+        setLoading(false);
+      }
     }
   };
 
   useEffect(() => {
     void fetchSettings();
   }, []);
+
+  useAutoRefresh(() => fetchSettings({ silent: true }), AUTO_REFRESH_INTERVAL_MS);
 
   const saveProxyPools = async (event: React.FormEvent) => {
     event.preventDefault();

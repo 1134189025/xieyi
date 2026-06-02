@@ -25,7 +25,7 @@ describe('safeErrorMessage', () => {
     };
 
     expect(safeErrorMessage(error, '创建订单失败')).toBe(
-      '无法识别 ChatGPT Session，请粘贴完整 session JSON、accessToken 或 session cookie',
+      '无法识别 ChatGPT Session，请粘贴 accessToken，或包含 accessToken/access_token/at 的 session JSON',
     );
   });
 

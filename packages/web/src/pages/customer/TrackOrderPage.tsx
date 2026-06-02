@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { publicApi } from '../../api/client';
 import { useOrderTracking } from '../../hooks/useSocket';
+import { useAutoRefresh } from '../../hooks/useAutoRefresh';
 import QrCodeDisplay from '../../components/QrCodeDisplay';
 import StatusBadge from '../../components/StatusBadge';
 import { CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
@@ -66,16 +67,11 @@ export default function TrackOrderPage() {
     void fetchOrder();
   }, [fetchOrder]);
 
-  useEffect(() => {
-    if (order?.status !== 'PENDING_PAYMENT' && order?.status !== 'CREATING_PAYMENT') return;
-
-    const refreshIntervalMs = order.status === 'CREATING_PAYMENT' ? 5_000 : 60_000;
-    const refreshTimer = window.setInterval(() => {
-      void fetchOrder({ silent: true });
-    }, refreshIntervalMs);
-
-    return () => window.clearInterval(refreshTimer);
-  }, [fetchOrder, order?.status]);
+  useAutoRefresh(
+    () => fetchOrder({ silent: true }),
+    order?.status === 'CREATING_PAYMENT' ? 5_000 : 10_000,
+    order?.status === 'PENDING_PAYMENT' || order?.status === 'CREATING_PAYMENT',
+  );
 
   useOrderTracking(trackingToken, refreshOrderFromSocket);
 

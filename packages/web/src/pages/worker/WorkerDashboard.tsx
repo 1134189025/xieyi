@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import api from '../../api/client';
 import { useAuth } from '../../hooks/useAuth';
+import { AUTO_REFRESH_INTERVAL_MS, useAutoRefresh } from '../../hooks/useAutoRefresh';
 import { useSocket } from '../../hooks/useSocket';
 import toast from 'react-hot-toast';
 import { CheckCircle, Copy, Loader2 } from 'lucide-react';
@@ -22,6 +23,10 @@ interface CompletionSummary {
   completedTotal: number;
   completedToday: number;
   completedThisWeek: number;
+}
+
+interface FetchOrdersOptions {
+  silent?: boolean;
 }
 
 export default function WorkerDashboard() {
@@ -46,14 +51,18 @@ export default function WorkerDashboard() {
     });
   };
 
-  const fetchOrders = async () => {
+  const fetchOrders = async (options: FetchOrdersOptions = {}) => {
     try {
       const ordersResponse = await api.get('/worker/orders?limit=50');
       setOrders(sortWorkerOrders(ordersResponse.data.orders.filter(isPendingPaymentOrder)));
     } catch {
-      toast.error('订单加载失败');
+      if (!options.silent) {
+        toast.error('订单加载失败');
+      }
     } finally {
-      setLoading(false);
+      if (!options.silent) {
+        setLoading(false);
+      }
     }
   };
 
@@ -83,6 +92,14 @@ export default function WorkerDashboard() {
       socket.off('order:completed', handleCompleted);
     };
   }, [socket]);
+
+  useAutoRefresh(
+    () => Promise.all([
+      fetchOrders({ silent: true }),
+      fetchSummary(),
+    ]).then(() => undefined),
+    AUTO_REFRESH_INTERVAL_MS,
+  );
 
   const handleComplete = async (orderId: string) => {
     if (!confirm('确认这笔 Pix 已完成付款？')) return;

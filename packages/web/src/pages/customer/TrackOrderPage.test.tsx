@@ -40,6 +40,14 @@ function pendingOrder(queueEstimate: unknown) {
   };
 }
 
+function completedOrder() {
+  return {
+    ...pendingOrder(null),
+    status: 'PAYMENT_COMPLETED',
+    completedAt: '2026-06-01T00:10:00.000Z',
+  };
+}
+
 function creatingOrder(queueEstimate: unknown) {
   return {
     trackingToken: 'track-1',
@@ -178,5 +186,28 @@ describe('TrackOrderPage', () => {
     expect(container.textContent).toContain('排队第 3 位');
     expect(container.textContent).toContain('预计约 15 分钟');
     expect(container.querySelector<HTMLInputElement>('input[readonly]')?.value).toBe('pix-code');
+  });
+
+  it('refreshes pending payment orders every 10 seconds and shows completion automatically', async () => {
+    vi.useFakeTimers();
+    (publicApi.get as Mock)
+      .mockResolvedValueOnce({ data: pendingOrder(null) })
+      .mockResolvedValueOnce({ data: completedOrder() });
+
+    const { container, root } = renderTrackOrderPage();
+    mountedRoot = root;
+    await flushAsyncWork();
+
+    expect(container.querySelector<HTMLInputElement>('input[readonly]')?.value).toBe('pix-code');
+
+    await act(async () => {
+      vi.advanceTimersByTime(10_000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(publicApi.get).toHaveBeenCalledTimes(2);
+    expect(container.querySelector('.success-icon')).not.toBeNull();
+    expect(container.querySelector<HTMLInputElement>('input[readonly]')).toBeNull();
   });
 });
