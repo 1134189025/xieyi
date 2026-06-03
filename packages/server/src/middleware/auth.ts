@@ -28,9 +28,9 @@ export const authenticate: RequestHandler = async (req, res, next) => {
     const payload = jwt.verify(header.slice(7), config.jwtSecret) as JwtPayload;
     const user = await prisma.user.findUnique({
       where: { id: payload.sub },
-      select: { id: true, role: true, enabled: true },
+      select: { id: true, role: true, enabled: true, deletedAt: true },
     });
-    if (!user?.enabled) {
+    if (!user?.enabled || user.deletedAt) {
       res.status(401).json({ error: 'Invalid or expired token' });
       return;
     }

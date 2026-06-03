@@ -3,7 +3,7 @@ import api from '../../api/client';
 import Layout from '../../components/Layout';
 import { AUTO_REFRESH_INTERVAL_MS, useAutoRefresh } from '../../hooks/useAutoRefresh';
 import toast from 'react-hot-toast';
-import { Plus, UserX, Loader2, Shield } from 'lucide-react';
+import { Plus, UserX, Loader2, Shield, Trash2 } from 'lucide-react';
 
 interface WorkerItem {
   id: string;
@@ -80,6 +80,18 @@ export default function WorkerManagementPage() {
       fetchWorkers();
     } catch {
       toast.error('更新工人失败');
+    }
+  };
+
+  const handleArchive = async (worker: WorkerItem) => {
+    if (!window.confirm(`确认删除工人「${worker.username}」？该账号将不可登录，历史订单归属会保留。`)) return;
+
+    try {
+      await api.delete(`/admin/workers/${worker.id}`);
+      toast.success('工人已删除');
+      await fetchWorkers();
+    } catch {
+      toast.error('删除工人失败');
     }
   };
 
@@ -195,6 +207,13 @@ export default function WorkerManagementPage() {
                         title={worker.enabled ? '禁用' : '启用'}
                       >
                         {worker.enabled ? <UserX size={16} /> : <Shield size={16} />}
+                      </button>
+                      <button
+                        onClick={() => handleArchive(worker)}
+                        className="p-1 text-red-400 hover:text-red-600"
+                        title="删除工人"
+                      >
+                        <Trash2 size={16} />
                       </button>
                     </td>
                   </tr>

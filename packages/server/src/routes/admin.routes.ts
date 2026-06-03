@@ -8,7 +8,12 @@ import {
   listCodeBatches,
   listCodes,
 } from '../services/redemption-code.service.ts';
-import { createWorker, listWorkers, updateWorker, deleteWorker } from '../services/worker.service.ts';
+import {
+  archiveWorkerAccount,
+  createWorkerAccount,
+  listWorkerAccountsForManagement,
+  updateWorkerAccount,
+} from '../services/worker.service.ts';
 import { getAdminOrders, cancelOrder } from '../services/order.service.ts';
 import { getDashboardStats } from '../services/dashboard.service.ts';
 import {
@@ -104,7 +109,7 @@ router.post('/workers', async (req, res, next) => {
     const parsed = createWorkerSchema.safeParse(req.body);
     if (!parsed.success) throw new AppError(400, 'Invalid input');
 
-    const worker = await createWorker(parsed.data.username, parsed.data.password, parsed.data.displayName);
+    const worker = await createWorkerAccount(parsed.data.username, parsed.data.password, parsed.data.displayName);
     res.status(201).json(worker);
   } catch (error) {
     next(error);
@@ -113,7 +118,7 @@ router.post('/workers', async (req, res, next) => {
 
 router.get('/workers', async (_req, res, next) => {
   try {
-    const workers = await listWorkers();
+    const workers = await listWorkerAccountsForManagement();
     res.json({ workers });
   } catch (error) {
     next(error);
@@ -125,7 +130,7 @@ router.patch('/workers/:id', async (req, res, next) => {
     const parsed = updateWorkerSchema.safeParse(req.body);
     if (!parsed.success) throw new AppError(400, 'Invalid input');
 
-    const worker = await updateWorker(req.params.id, parsed.data);
+    const worker = await updateWorkerAccount(req.params.id, parsed.data);
     res.json(worker);
   } catch (error) {
     next(error);
@@ -134,7 +139,7 @@ router.patch('/workers/:id', async (req, res, next) => {
 
 router.delete('/workers/:id', async (req, res, next) => {
   try {
-    await deleteWorker(req.params.id);
+    await archiveWorkerAccount(req.params.id);
     res.json({ success: true });
   } catch (error) {
     next(error);

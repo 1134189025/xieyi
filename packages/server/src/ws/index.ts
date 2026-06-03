@@ -168,8 +168,8 @@ async function verifySocketUser(token: string): Promise<JwtPayload> {
   const payload = jwt.verify(token, config.jwtSecret) as JwtPayload;
   const user = await prisma.user.findUnique({
     where: { id: payload.sub },
-    select: { id: true, role: true, enabled: true },
+    select: { id: true, role: true, enabled: true, deletedAt: true },
   });
-  if (!user?.enabled) throw new Error('Authentication failed');
+  if (!user?.enabled || user.deletedAt) throw new Error('Authentication failed');
   return { sub: user.id, role: user.role };
 }
