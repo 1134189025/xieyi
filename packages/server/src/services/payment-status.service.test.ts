@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const prisma = {
+  $executeRaw: vi.fn(),
   order: {
     findMany: vi.fn(),
     updateMany: vi.fn(),
@@ -41,6 +42,7 @@ describe('payment-status.service', () => {
       maskedProxy: 'http://stripe:****@stripe-proxy.example:10001',
     });
     shouldCountProxyFailure.mockReturnValue(false);
+    prisma.$executeRaw.mockResolvedValue(0);
     prisma.order.findMany.mockResolvedValue([]);
   });
 
@@ -58,21 +60,24 @@ describe('payment-status.service', () => {
     expect(retrieveStripeSetupIntentStatus).not.toHaveBeenCalled();
   });
 
-  it('uses the Stripe proxy pool and completes succeeded SetupIntents by order status only', async () => {
+  it('uses the Stripe proxy pool and completes succeeded SetupIntents with current database claim ownership', async () => {
     const pendingOrder = {
       id: 'order-1',
       trackingToken: 'track-1',
       status: 'PENDING_PAYMENT',
       setupIntentId: 'seti_123',
       setupIntentClientSecret: 'encrypted:seti_123_secret_456',
+      claimedById: null,
     };
     const completedOrder = {
       ...pendingOrder,
       status: 'PAYMENT_COMPLETED',
       completedAt: new Date('2026-06-01T00:00:00.000Z'),
+      claimedById: 'worker-2',
+      completedById: 'worker-2',
     };
     prisma.order.findMany.mockResolvedValue([pendingOrder]);
-    prisma.order.updateMany.mockResolvedValue({ count: 1 });
+    prisma.$executeRaw.mockResolvedValue(1);
     prisma.order.findUnique.mockResolvedValue(completedOrder);
     retrieveStripeSetupIntentStatus.mockResolvedValue({ id: 'seti_123', status: 'succeeded' });
 
@@ -92,15 +97,39 @@ describe('payment-status.service', () => {
         retry: { attempts: 3 },
       }),
     );
-    expect(prisma.order.updateMany).toHaveBeenCalledWith({
-      where: { id: 'order-1', status: 'PENDING_PAYMENT' },
-      data: {
-        status: 'PAYMENT_COMPLETED',
-        completedAt: expect.any(Date),
-      },
-    });
+    expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+    expect(prisma.order.updateMany).not.toHaveBeenCalled();
     expect(recordProxySuccess).toHaveBeenCalledWith('stripe', 'stripe-proxy-1');
     expect(broadcastOrderStatusChange).toHaveBeenCalledWith(completedOrder);
+  });
+
+  it('checks multiple pending orders with limited parallelism', async () => {
+    const orders = Array.from({ length: 4 }, (_, index) => ({
+      id: `order-${index + 1}`,
+      trackingToken: `track-${index + 1}`,
+      status: 'PENDING_PAYMENT',
+      setupIntentId: `seti_${index + 1}`,
+      setupIntentClientSecret: `encrypted:seti_${index + 1}_secret`,
+      claimedById: null,
+    }));
+    prisma.order.findMany.mockResolvedValue(orders);
+    prisma.$executeRaw.mockResolvedValue(0);
+
+    let activeChecks = 0;
+    let maxActiveChecks = 0;
+    retrieveStripeSetupIntentStatus.mockImplementation(async () => {
+      activeChecks += 1;
+      maxActiveChecks = Math.max(maxActiveChecks, activeChecks);
+      await Promise.resolve();
+      activeChecks -= 1;
+      return { id: 'different_seti', status: 'requires_action' };
+    });
+
+    await detectCompletedPixPayments();
+
+    expect(retrieveStripeSetupIntentStatus).toHaveBeenCalledTimes(4);
+    expect(maxActiveChecks).toBeLessThanOrEqual(5);
+    expect(maxActiveChecks).toBeGreaterThan(1);
   });
 
   it('scans pending payment orders in stable order', async () => {

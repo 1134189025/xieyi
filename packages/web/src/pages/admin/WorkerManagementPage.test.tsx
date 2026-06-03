@@ -54,7 +54,7 @@ describe('WorkerManagementPage', () => {
     document.body.innerHTML = '';
   });
 
-  it('does not show per-worker completed order counts', async () => {
+  it('shows per-worker completed order counts', async () => {
     (api.get as Mock).mockResolvedValue({
       data: {
         workers: [
@@ -63,6 +63,11 @@ describe('WorkerManagementPage', () => {
             username: 'worker',
             displayName: '工人',
             enabled: true,
+            completedTotal: 12,
+            completedToday: 2,
+            completedThisWeek: 7,
+            claimedCount: 1,
+            lastCompletedAt: '2026-06-03T01:00:00.000Z',
             createdAt: '2026-06-01T00:00:00.000Z',
           },
         ],
@@ -74,7 +79,10 @@ describe('WorkerManagementPage', () => {
 
     expect(container.textContent).toContain('工人管理');
     expect(container.textContent).toContain('worker');
-    expect(container.textContent).not.toContain('完成订单');
+    expect(container.textContent).toContain('今日完成');
+    expect(container.textContent).toContain('本周完成');
+    expect(container.textContent).toContain('总完成');
+    expect(container.textContent).toContain('12');
   });
 
   it('silently refreshes workers every 10 seconds', async () => {
@@ -114,6 +122,11 @@ function workerResponse(overrides: Partial<{ id: string; username: string }> = {
     username: overrides.username ?? 'worker',
     displayName: '宸ヤ汉',
     enabled: true,
+    completedTotal: 12,
+    completedToday: 2,
+    completedThisWeek: 7,
+    claimedCount: 1,
+    lastCompletedAt: '2026-06-03T01:00:00.000Z',
     createdAt: '2026-06-01T00:00:00.000Z',
   };
 }

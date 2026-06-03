@@ -28,6 +28,14 @@ const MAX_QUEUE_SECONDS_PER_ORDER = 30 * 60;
 const RECENT_COMPLETION_LOOKBACK_MS = 24 * 60 * 60 * 1000;
 const RECENT_COMPLETION_SAMPLE_LIMIT = 20;
 const MIN_RECENT_COMPLETION_SAMPLES = 3;
+const CLAIM_LOCK_MS = 30 * 60 * 1000;
+const MAX_DIAGNOSTIC_DETAIL_LENGTH = 1000;
+
+export interface GenerationFailureDiagnostic {
+  stage?: string | null;
+  detail?: string | null;
+  httpStatus?: number | null;
+}
 
 interface CreatingPaymentOrder {
   id: string;
@@ -58,7 +66,28 @@ type OrderWithGeneration = Order & {
   generationStartedAt?: Date | null;
   generationFinishedAt?: Date | null;
   generationErrorCode?: string | null;
+  generationErrorStage?: string | null;
+  generationErrorDetail?: string | null;
+  generationErrorHttpStatus?: number | null;
   submittedRedemptionCode?: string | null;
+  claimedById?: string | null;
+  claimedAt?: Date | null;
+  claimExpiresAt?: Date | null;
+  completedById?: string | null;
+};
+
+type WorkerOrderRow = {
+  id: string;
+  trackingToken: string;
+  status: string;
+  pixCode: string | null;
+  pixQrPng: Uint8Array | Buffer | null;
+  pixExpiresAt: Date | null;
+  pixImageUrl: string | null;
+  createdAt: Date;
+  claimedById: string | null;
+  claimedAt: Date | null;
+  claimExpiresAt: Date | null;
 };
 
 export async function createOrder(redemptionCode: string, session: string) {
@@ -172,9 +201,14 @@ async function releaseCreatingPaymentOrder(orderId: string) {
   `;
 }
 
-export async function failCreatingPaymentOrder(orderId: string, errorCode: string) {
+export async function failCreatingPaymentOrder(
+  orderId: string,
+  errorCode: string,
+  diagnostic: GenerationFailureDiagnostic = {},
+) {
   const failedAt = new Date();
   const safeFailureMessage = customerFailureMessage(errorCode);
+  const safeDiagnostic = sanitizeGenerationFailureDiagnostic(diagnostic);
   await prisma.$executeRaw`
     WITH target AS (
       SELECT "redemption_code_id"
@@ -187,6 +221,9 @@ export async function failCreatingPaymentOrder(orderId: string, errorCode: strin
         "status" = 'FAILED',
         "generation_finished_at" = ${failedAt},
         "generation_error_code" = ${errorCode},
+        "generation_error_stage" = ${safeDiagnostic.stage},
+        "generation_error_detail" = ${safeDiagnostic.detail},
+        "generation_error_http_status" = ${safeDiagnostic.httpStatus},
         "error_message" = ${safeFailureMessage},
         "redemption_code_id" = NULL,
         "encrypted_session_data" = NULL,
@@ -204,6 +241,36 @@ export async function failCreatingPaymentOrder(orderId: string, errorCode: strin
 
   const updatedOrder = await prisma.order.findUnique({ where: { id: orderId } });
   if (updatedOrder) broadcastOrderStatusChange(updatedOrder);
+}
+
+function sanitizeGenerationFailureDiagnostic(
+  diagnostic: GenerationFailureDiagnostic,
+): Required<GenerationFailureDiagnostic> {
+  return {
+    stage: sanitizeDiagnosticStage(diagnostic.stage),
+    detail: sanitizeDiagnosticDetail(diagnostic.detail),
+    httpStatus: typeof diagnostic.httpStatus === 'number' ? diagnostic.httpStatus : null,
+  };
+}
+
+function sanitizeDiagnosticStage(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const sanitized = value.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80);
+  return sanitized || null;
+}
+
+function sanitizeDiagnosticDetail(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const sanitized = value
+    .replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[redacted-token]')
+    .replace(/eyJ[^\s"'<>]+/g, '[redacted-token]')
+    .replace(/seti_[A-Za-z0-9_]+_secret_[A-Za-z0-9_]+/g, '[redacted-client-secret]')
+    .replace(/000201[A-Za-z0-9+/.=_-]{40,}/g, '[redacted-pix-code]')
+    .replace(/:\/\/([^:@/\s]+):([^@/\s]+)@/g, '://****@')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, MAX_DIAGNOSTIC_DETAIL_LENGTH);
+  return sanitized || null;
 }
 
 function toPublicOrderCreationError(error: unknown): AppError {
@@ -265,7 +332,11 @@ function customerFailureMessage(errorCode: string | null | undefined): string {
 }
 
 export async function getWorkerOrders(page: number, limit: number) {
-  const workerQueueWhere: Prisma.OrderWhereInput = { status: 'PENDING_PAYMENT' };
+  const now = new Date();
+  const workerQueueWhere: Prisma.OrderWhereInput = {
+    status: 'PENDING_PAYMENT',
+    OR: [{ claimedById: null }, { claimExpiresAt: { lt: now } }],
+  };
   const [orders, total] = await Promise.all([
     prisma.order.findMany({
       where: workerQueueWhere,
@@ -285,6 +356,7 @@ export async function getWorkerOrders(page: number, limit: number) {
 }
 
 function buildWorkerOrderView(order: Order) {
+  const claim = order as OrderWithGeneration;
   return {
     id: order.id,
     trackingToken: order.trackingToken,
@@ -293,8 +365,118 @@ function buildWorkerOrderView(order: Order) {
     pixQrPngBase64: order.pixQrPng ? Buffer.from(order.pixQrPng).toString('base64') : null,
     pixExpiresAt: order.pixExpiresAt?.toISOString() ?? null,
     pixImageUrl: order.pixImageUrl,
+    claimedById: claim.claimedById ?? null,
+    claimedAt: claim.claimedAt?.toISOString() ?? null,
+    claimExpiresAt: claim.claimExpiresAt?.toISOString() ?? null,
     createdAt: order.createdAt.toISOString(),
   };
+}
+
+function buildWorkerOrderRowView(order: WorkerOrderRow) {
+  return {
+    id: order.id,
+    trackingToken: order.trackingToken,
+    status: order.status,
+    pixCode: order.pixCode,
+    pixQrPngBase64: order.pixQrPng ? Buffer.from(order.pixQrPng).toString('base64') : null,
+    pixExpiresAt: order.pixExpiresAt?.toISOString() ?? null,
+    pixImageUrl: order.pixImageUrl,
+    claimedById: order.claimedById,
+    claimedAt: order.claimedAt?.toISOString() ?? null,
+    claimExpiresAt: order.claimExpiresAt?.toISOString() ?? null,
+    createdAt: order.createdAt.toISOString(),
+  };
+}
+
+export async function claimNextPaymentOrder(workerId: string) {
+  const claimedAt = new Date();
+  const claimExpiresAt = new Date(claimedAt.getTime() + CLAIM_LOCK_MS);
+  const [claimed] = await prisma.$queryRaw<WorkerOrderRow[]>`
+    WITH candidate AS (
+      SELECT "id"
+      FROM "orders"
+      WHERE "status" = 'PENDING_PAYMENT'
+        AND ("claimed_by_id" IS NULL OR "claim_expires_at" < NOW())
+      ORDER BY "created_at" ASC, "id" ASC
+      FOR UPDATE SKIP LOCKED
+      LIMIT 1
+    ),
+    claimed AS (
+      UPDATE "orders"
+      SET
+        "claimed_by_id" = ${workerId},
+        "claimed_at" = ${claimedAt},
+        "claim_expires_at" = ${claimExpiresAt},
+        "updated_at" = NOW()
+      WHERE "id" IN (SELECT "id" FROM candidate)
+      RETURNING
+        "id",
+        "tracking_token" AS "trackingToken",
+        "status"::text AS "status",
+        "pix_code" AS "pixCode",
+        "pix_qr_png" AS "pixQrPng",
+        "pix_expires_at" AS "pixExpiresAt",
+        "pix_image_url" AS "pixImageUrl",
+        "created_at" AS "createdAt",
+        "claimed_by_id" AS "claimedById",
+        "claimed_at" AS "claimedAt",
+        "claim_expires_at" AS "claimExpiresAt"
+    )
+    SELECT * FROM claimed
+  `;
+
+  return claimed ? buildWorkerOrderRowView(claimed) : null;
+}
+
+export async function getWorkerClaimedOrders(workerId: string, page: number, limit: number) {
+  const where: Prisma.OrderWhereInput = {
+    status: 'PENDING_PAYMENT',
+    claimedById: workerId,
+    claimExpiresAt: { gt: new Date() },
+  };
+  const [orders, total] = await Promise.all([
+    prisma.order.findMany({
+      where,
+      orderBy: [{ claimedAt: 'asc' }, { id: 'asc' }],
+      skip: (page - 1) * limit,
+      take: limit,
+    }),
+    prisma.order.count({ where }),
+  ]);
+
+  return {
+    orders: orders.map(buildWorkerOrderView),
+    total,
+    page,
+    limit,
+  };
+}
+
+export async function renewClaimedPaymentOrder(orderId: string, workerId: string) {
+  const now = new Date();
+  const claimExpiresAt = new Date(now.getTime() + CLAIM_LOCK_MS);
+  const changed = await prisma.order.updateMany({
+    where: {
+      id: orderId,
+      status: 'PENDING_PAYMENT',
+      claimedById: workerId,
+      claimExpiresAt: { gt: now },
+    },
+    data: { claimExpiresAt },
+  });
+  if (changed.count === 0) throw new AppError(409, 'Order is not claimed by current worker');
+
+  return { id: orderId, claimExpiresAt: claimExpiresAt.toISOString() };
+}
+
+export async function releaseClaimedPaymentOrder(orderId: string, workerId: string) {
+  const changed = await prisma.order.updateMany({
+    where: { id: orderId, status: 'PENDING_PAYMENT', claimedById: workerId },
+    data: { claimedById: null, claimedAt: null, claimExpiresAt: null },
+  });
+  if (changed.count === 0) throw new AppError(409, 'Order is not claimed by current worker');
+
+  return { id: orderId, released: true };
 }
 
 async function calculateQueueEstimate(order: Order): Promise<QueueEstimate | null> {
@@ -442,16 +624,52 @@ export async function completeOrder(orderId: string) {
   return { id: updated.id, status: updated.status, completedAt: updated.completedAt?.toISOString() };
 }
 
-export async function getWorkerSummary() {
+export async function completeClaimedPaymentOrder(orderId: string, workerId: string) {
+  const completedAt = new Date();
+  const changed = await prisma.order.updateMany({
+    where: {
+      id: orderId,
+      status: 'PENDING_PAYMENT',
+      claimedById: workerId,
+      claimExpiresAt: { gt: completedAt },
+    },
+    data: {
+      status: 'PAYMENT_COMPLETED',
+      completedAt,
+      completedById: workerId,
+    },
+  });
+
+  if (changed.count === 0) {
+    const order = await prisma.order.findUnique({ where: { id: orderId } });
+    if (!order) throw new AppError(404, 'Order not found');
+    throw new AppError(409, 'Order is not claimed by current worker');
+  }
+
+  const updated = await prisma.order.findUnique({ where: { id: orderId } });
+  if (!updated) throw new AppError(404, 'Order not found');
+
+  broadcastOrderStatusChange(updated);
+  return {
+    id: updated.id,
+    status: updated.status,
+    completedAt: updated.completedAt?.toISOString(),
+    completedById: (updated as OrderWithGeneration).completedById ?? workerId,
+  };
+}
+
+export async function getWorkerSummary(workerId: string) {
   const shanghaiDayRange = getShanghaiDayRange(new Date());
   const shanghaiWeekRange = getShanghaiWeekRange(new Date());
-  const [completedTotal, completedToday, completedThisWeek] = await Promise.all([
+  const now = new Date();
+  const [completedTotal, completedToday, completedThisWeek, claimedCount, availableCount] = await Promise.all([
     prisma.order.count({
-      where: { status: 'PAYMENT_COMPLETED' },
+      where: { status: 'PAYMENT_COMPLETED', completedById: workerId },
     }),
     prisma.order.count({
       where: {
         status: 'PAYMENT_COMPLETED',
+        completedById: workerId,
         completedAt: {
           gte: shanghaiDayRange.start,
           lt: shanghaiDayRange.end,
@@ -461,15 +679,29 @@ export async function getWorkerSummary() {
     prisma.order.count({
       where: {
         status: 'PAYMENT_COMPLETED',
+        completedById: workerId,
         completedAt: {
           gte: shanghaiWeekRange.start,
           lt: shanghaiWeekRange.end,
         },
       },
     }),
+    prisma.order.count({
+      where: {
+        status: 'PENDING_PAYMENT',
+        claimedById: workerId,
+        claimExpiresAt: { gt: now },
+      },
+    }),
+    prisma.order.count({
+      where: {
+        status: 'PENDING_PAYMENT',
+        OR: [{ claimedById: null }, { claimExpiresAt: { lt: now } }],
+      },
+    }),
   ]);
 
-  return { completedTotal, completedToday, completedThisWeek };
+  return { completedTotal, completedToday, completedThisWeek, claimedCount, availableCount };
 }
 
 export async function getAdminOrders(filters: {
@@ -488,6 +720,10 @@ export async function getAdminOrders(filters: {
       orderBy: { createdAt: 'desc' },
       skip: (filters.page - 1) * filters.limit,
       take: filters.limit,
+      include: {
+        claimedBy: { select: { id: true, username: true, displayName: true } },
+        completedBy: { select: { id: true, username: true, displayName: true } },
+      },
     }),
     prisma.order.count({ where }),
   ]);
@@ -497,9 +733,18 @@ export async function getAdminOrders(filters: {
       id: order.id,
       trackingToken: order.trackingToken,
       status: order.status,
-      pixCode: order.pixCode,
       checkoutSessionId: order.checkoutSessionId,
       errorMessage: order.errorMessage,
+      generationErrorCode: order.generationErrorCode,
+      generationErrorStage: (order as OrderWithGeneration).generationErrorStage ?? null,
+      generationErrorDetail: (order as OrderWithGeneration).generationErrorDetail ?? null,
+      generationErrorHttpStatus: (order as OrderWithGeneration).generationErrorHttpStatus ?? null,
+      claimedBy: (order as typeof order & {
+        claimedBy?: { id: string; username: string; displayName: string | null } | null;
+      }).claimedBy ?? null,
+      completedBy: (order as typeof order & {
+        completedBy?: { id: string; username: string; displayName: string | null } | null;
+      }).completedBy ?? null,
       completedAt: order.completedAt?.toISOString() ?? null,
       createdAt: order.createdAt.toISOString(),
     })),
@@ -578,6 +823,12 @@ function toOrderLike(order: CreatingPaymentOrder): Order {
     generationStartedAt: null,
     generationFinishedAt: null,
     generationErrorCode: null,
+    generationErrorStage: null,
+    generationErrorDetail: null,
+    generationErrorHttpStatus: null,
     submittedRedemptionCode: null,
+    claimedById: null,
+    claimedAt: null,
+    claimExpiresAt: null,
   } as unknown as OrderWithGeneration;
 }

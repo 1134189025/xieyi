@@ -1,6 +1,7 @@
 import bcrypt from 'bcrypt';
 import { prisma } from '../db.ts';
 import { AppError } from '../middleware/error-handler.ts';
+import { getShanghaiDayRange, getShanghaiWeekRange } from '../utils/shanghai-time.ts';
 
 export async function createWorker(username: string, password: string, displayName?: string) {
   const existing = await prisma.user.findUnique({ where: { username } });
@@ -22,18 +23,61 @@ export async function createWorker(username: string, password: string, displayNa
 }
 
 export async function listWorkers() {
+  const shanghaiDayRange = getShanghaiDayRange(new Date());
+  const shanghaiWeekRange = getShanghaiWeekRange(new Date());
   const workers = await prisma.user.findMany({
     where: { role: 'WORKER' },
     orderBy: { createdAt: 'desc' },
   });
 
-  return workers.map((w) => ({
-    id: w.id,
-    username: w.username,
-    displayName: w.displayName,
-    enabled: w.enabled,
-    createdAt: w.createdAt.toISOString(),
-  }));
+  return Promise.all(
+    workers.map(async (worker) => {
+      const [completedTotal, completedToday, completedThisWeek, claimedCount, lastCompleted] = await Promise.all([
+        prisma.order.count({
+          where: { status: 'PAYMENT_COMPLETED', completedById: worker.id },
+        }),
+        prisma.order.count({
+          where: {
+            status: 'PAYMENT_COMPLETED',
+            completedById: worker.id,
+            completedAt: { gte: shanghaiDayRange.start, lt: shanghaiDayRange.end },
+          },
+        }),
+        prisma.order.count({
+          where: {
+            status: 'PAYMENT_COMPLETED',
+            completedById: worker.id,
+            completedAt: { gte: shanghaiWeekRange.start, lt: shanghaiWeekRange.end },
+          },
+        }),
+        prisma.order.count({
+          where: {
+            status: 'PENDING_PAYMENT',
+            claimedById: worker.id,
+            claimExpiresAt: { gt: new Date() },
+          },
+        }),
+        prisma.order.findFirst({
+          where: { status: 'PAYMENT_COMPLETED', completedById: worker.id },
+          orderBy: { completedAt: 'desc' },
+          select: { completedAt: true },
+        }),
+      ]);
+
+      return {
+        id: worker.id,
+        username: worker.username,
+        displayName: worker.displayName,
+        enabled: worker.enabled,
+        completedTotal,
+        completedToday,
+        completedThisWeek,
+        claimedCount,
+        lastCompletedAt: lastCompleted?.completedAt?.toISOString() ?? null,
+        createdAt: worker.createdAt.toISOString(),
+      };
+    }),
+  );
 }
 
 export async function updateWorker(

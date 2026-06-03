@@ -11,11 +11,22 @@ interface OrderItem {
   id: string;
   trackingToken: string;
   status: string;
-  pixCode: string | null;
   checkoutSessionId: string | null;
   errorMessage: string | null;
+  generationErrorCode: string | null;
+  generationErrorStage: string | null;
+  generationErrorDetail: string | null;
+  generationErrorHttpStatus: number | null;
+  claimedBy: WorkerRef | null;
+  completedBy: WorkerRef | null;
   completedAt: string | null;
   createdAt: string;
+}
+
+interface WorkerRef {
+  id: string;
+  username: string;
+  displayName: string | null;
 }
 
 interface FetchOrdersOptions {
@@ -101,11 +112,13 @@ export default function OrdersPage() {
           <div className="py-10 text-center text-app-secondary">{error}</div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="min-w-[680px] w-full text-sm">
+            <table className="min-w-[980px] w-full text-sm">
               <thead className="bg-neutral-50">
                 <tr>
                   <th className="px-6 py-3 text-left font-medium text-app-secondary">追踪码</th>
                   <th className="px-6 py-3 text-left font-medium text-app-secondary">状态</th>
+                  <th className="px-6 py-3 text-left font-medium text-app-secondary">归属工人</th>
+                  <th className="px-6 py-3 text-left font-medium text-app-secondary">失败诊断</th>
                   <th className="px-6 py-3 text-left font-medium text-app-secondary">创建时间</th>
                   <th className="px-6 py-3 text-left font-medium text-app-secondary">完成时间</th>
                   <th className="px-6 py-3 text-right font-medium text-app-secondary">操作</th>
@@ -117,6 +130,20 @@ export default function OrdersPage() {
                     <td className="px-6 py-3 font-mono text-xs">{order.trackingToken}</td>
                     <td className="px-6 py-3">
                       <StatusBadge status={order.status} />
+                    </td>
+                    <td className="px-6 py-3 text-app-secondary">
+                      {workerOwnershipLabel(order)}
+                    </td>
+                    <td className="px-6 py-3 text-app-secondary">
+                      {order.generationErrorStage || order.generationErrorDetail ? (
+                        <div className="max-w-xs space-y-1">
+                          <p className="font-medium text-app-primary">
+                            {order.generationErrorStage ?? '-'}
+                            {order.generationErrorHttpStatus ? ` / HTTP ${order.generationErrorHttpStatus}` : ''}
+                          </p>
+                          <p className="break-words text-xs">{order.generationErrorDetail ?? order.generationErrorCode}</p>
+                        </div>
+                      ) : '-'}
                     </td>
                     <td className="px-6 py-3 text-app-secondary">
                       {new Date(order.createdAt).toLocaleString('zh-CN')}
@@ -162,4 +189,17 @@ export default function OrdersPage() {
       </div>
     </Layout>
   );
+}
+
+function workerName(worker: WorkerRef | null): string | null {
+  if (!worker) return null;
+  return worker.displayName ?? worker.username;
+}
+
+function workerOwnershipLabel(order: OrderItem): string {
+  const completedWorker = workerName(order.completedBy);
+  if (completedWorker) return `完成：${completedWorker}`;
+
+  const claimedWorker = workerName(order.claimedBy);
+  return claimedWorker ? `领取：${claimedWorker}` : '-';
 }

@@ -11,6 +11,7 @@ export interface AppConfig {
   corsOrigin: string;
   redisUrl: string;
   pixWorkerConcurrency: number;
+  paymentDetectionConcurrency: number;
   createOrderRateLimitPerMin: number;
 }
 
@@ -24,6 +25,7 @@ const TEST_DEFAULTS = {
   CORS_ORIGIN: 'http://localhost:5173',
   REDIS_URL: 'redis://127.0.0.1:6379',
   PIX_WORKER_CONCURRENCY: '5',
+  PAYMENT_DETECTION_CONCURRENCY: '5',
   CREATE_ORDER_RATE_LIMIT_PER_MIN: '30',
 };
 
@@ -45,6 +47,7 @@ export function loadConfig(
   const redisUrl = requireEnv(source, 'REDIS_URL');
   const port = Number(source.PORT ?? 3000);
   const pixWorkerConcurrency = Number(source.PIX_WORKER_CONCURRENCY ?? 5);
+  const paymentDetectionConcurrency = Number(source.PAYMENT_DETECTION_CONCURRENCY ?? 5);
   const createOrderRateLimitPerMin = Number(source.CREATE_ORDER_RATE_LIMIT_PER_MIN ?? 30);
 
   if (!Number.isInteger(port) || port <= 0 || port > 65535) {
@@ -62,6 +65,9 @@ export function loadConfig(
   if (!Number.isInteger(pixWorkerConcurrency) || pixWorkerConcurrency < 1 || pixWorkerConcurrency > 100) {
     throw new Error('PIX_WORKER_CONCURRENCY must be an integer between 1 and 100');
   }
+  if (!Number.isInteger(paymentDetectionConcurrency) || paymentDetectionConcurrency < 1 || paymentDetectionConcurrency > 50) {
+    throw new Error('PAYMENT_DETECTION_CONCURRENCY must be an integer between 1 and 50');
+  }
   if (!Number.isInteger(createOrderRateLimitPerMin) || createOrderRateLimitPerMin < 1 || createOrderRateLimitPerMin > 10000) {
     throw new Error('CREATE_ORDER_RATE_LIMIT_PER_MIN must be an integer between 1 and 10000');
   }
@@ -77,6 +83,7 @@ export function loadConfig(
     corsOrigin,
     redisUrl,
     pixWorkerConcurrency,
+    paymentDetectionConcurrency,
     createOrderRateLimitPerMin,
   };
 }

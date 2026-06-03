@@ -83,6 +83,8 @@ interface CompletionSummary {
   completedTotal: number;
   completedToday: number;
   completedThisWeek: number;
+  claimedCount: number;
+  availableCount: number;
 }
 
 function workerOrder(overrides: Partial<WorkerOrder> = {}): WorkerOrder {
@@ -101,10 +103,16 @@ function workerOrder(overrides: Partial<WorkerOrder> = {}): WorkerOrder {
 
 function mockDashboardLoad(
   orders: WorkerOrder[],
-  summary: CompletionSummary = { completedTotal: 10, completedToday: 2, completedThisWeek: 5 },
+  summary: CompletionSummary = {
+    completedTotal: 10,
+    completedToday: 2,
+    completedThisWeek: 5,
+    claimedCount: orders.length,
+    availableCount: 3,
+  },
 ) {
   (api.get as Mock).mockImplementation((url: string) => {
-    if (url === '/worker/orders?limit=50') {
+    if (url === '/worker/orders/mine?limit=50') {
       return Promise.resolve({ data: { orders } });
     }
     if (url === '/worker/summary') {
@@ -170,20 +178,52 @@ describe('WorkerDashboard', () => {
     document.body.innerHTML = '';
   });
 
-  it('显示总体、今日、本周完成数，并且不出现领取流程', async () => {
+  it('显示我的计数、可领取数量和领取任务按钮', async () => {
     mockDashboardLoad([workerOrder()]);
 
     const { container, root } = renderWorkerDashboard();
     mountedRoot = root;
     await flushAsyncWork();
 
-    expect(container.textContent).toContain('总已完成 10 单');
-    expect(container.textContent).toContain('今日 2 单');
-    expect(container.textContent).toContain('本周 5 单');
+    expect(container.textContent).toContain('我的总完成 10 单');
+    expect(container.textContent).toContain('我的今日 2 单');
+    expect(container.textContent).toContain('我的本周 5 单');
+    expect(container.textContent).toContain('可领取 3 单');
     expect(container.textContent).toContain('#1');
-    expect(findButton(container, '领取订单')).toBeUndefined();
+    expect(findButton(container, '领取任务')).not.toBeNull();
     expect(findButton(container, '标记为已完成')).not.toBeNull();
     expect(container.textContent).not.toContain('track-1');
+  });
+
+  it('点击领取任务后调用领取接口并刷新我的任务和计数', async () => {
+    let orderRequests = 0;
+    (api.get as Mock).mockImplementation((url: string) => {
+      if (url === '/worker/orders/mine?limit=50') {
+        orderRequests += 1;
+        return Promise.resolve({
+          data: {
+            orders: orderRequests >= 2 ? [workerOrder({ id: 'order-2', pixCode: 'pix-claimed' })] : [],
+          },
+        });
+      }
+      if (url === '/worker/summary') {
+        return Promise.resolve({
+          data: { completedTotal: 10, completedToday: 2, completedThisWeek: 5, claimedCount: 1, availableCount: 2 },
+        });
+      }
+      return Promise.reject(new Error(`Unexpected GET ${url}`));
+    });
+    (api.post as Mock).mockResolvedValue({ data: { order: workerOrder({ id: 'order-2' }) } });
+
+    const { container, root } = renderWorkerDashboard();
+    mountedRoot = root;
+    await flushAsyncWork();
+
+    await clickButton(findButton(container, '领取任务')!);
+    await flushAsyncWork();
+
+    expect(api.post).toHaveBeenCalledWith('/worker/orders/claim-next');
+    expect(container.textContent).toContain('#1');
   });
 
   it('二维码和 Pix 付款码界面按相同序号展示，切换不会改变排序', async () => {
@@ -218,7 +258,7 @@ describe('WorkerDashboard', () => {
     expect(readonlyInputValues(container)).toEqual(['pix-1', 'pix-2']);
   });
 
-  it('实时新增订单会去重排序并重新计算序号', async () => {
+  it('实时新增可领取任务不会直接进入我的任务列表', async () => {
     mockDashboardLoad([
       workerOrder({ id: 'order-2', pixCode: 'pix-2', createdAt: '2026-06-01T00:02:00.000Z' }),
     ]);
@@ -227,31 +267,35 @@ describe('WorkerDashboard', () => {
     mountedRoot = root;
     await flushAsyncWork();
 
-    act(() =>
+    await act(async () => {
       socketMock.emitEvent(
         'order:new',
         workerOrder({ id: 'order-1', pixCode: 'pix-1', createdAt: '2026-06-01T00:01:00.000Z' }),
-      ),
-    );
-    act(() =>
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => {
       socketMock.emitEvent(
         'order:new',
         workerOrder({ id: 'order-2', pixCode: 'pix-2-updated', createdAt: '2026-06-01T00:02:00.000Z' }),
-      ),
-    );
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
 
     expect(container.textContent).toContain('#1');
-    expect(container.textContent).toContain('#2');
+    expect(container.textContent).not.toContain('#2');
 
     await clickButton(findButton(container, 'Pix 付款码')!);
 
-    expect(readonlyInputValues(container)).toEqual(['pix-1', 'pix-2-updated']);
+    expect(readonlyInputValues(container)).toEqual(['pix-2']);
   });
 
   it('完成失败保留订单，完成成功或收到完成事件后移除订单并刷新三个计数', async () => {
     let summaryRequests = 0;
     (api.get as Mock).mockImplementation((url: string) => {
-      if (url === '/worker/orders?limit=50') {
+      if (url === '/worker/orders/mine?limit=50') {
         return Promise.resolve({ data: { orders: [workerOrder()] } });
       }
       if (url === '/worker/summary') {
@@ -259,8 +303,8 @@ describe('WorkerDashboard', () => {
         return Promise.resolve({
           data:
             summaryRequests >= 2
-              ? { completedTotal: 11, completedToday: 3, completedThisWeek: 6 }
-              : { completedTotal: 10, completedToday: 2, completedThisWeek: 5 },
+              ? { completedTotal: 11, completedToday: 3, completedThisWeek: 6, claimedCount: 0, availableCount: 3 }
+              : { completedTotal: 10, completedToday: 2, completedThisWeek: 5, claimedCount: 1, availableCount: 3 },
         });
       }
       return Promise.reject(new Error(`Unexpected GET ${url}`));
@@ -276,15 +320,15 @@ describe('WorkerDashboard', () => {
 
     expect(api.post).toHaveBeenCalledWith('/worker/orders/order-1/complete');
     expect(container.querySelector('img[alt="Pix 二维码"]')).not.toBeNull();
-    expect(container.textContent).toContain('总已完成 10 单');
+    expect(container.textContent).toContain('我的总完成 10 单');
 
     await clickButton(findButton(container, '标记为已完成')!);
     await flushAsyncWork();
 
     expect(container.querySelector('img[alt="Pix 二维码"]')).toBeNull();
-    expect(container.textContent).toContain('总已完成 11 单');
-    expect(container.textContent).toContain('今日 3 单');
-    expect(container.textContent).toContain('本周 6 单');
+    expect(container.textContent).toContain('我的总完成 11 单');
+    expect(container.textContent).toContain('我的今日 3 单');
+    expect(container.textContent).toContain('我的本周 6 单');
 
     act(() => socketMock.emitEvent('order:new', workerOrder({ id: 'order-3' })));
     act(() => socketMock.emitEvent('order:completed', { id: 'order-3' }));
@@ -312,7 +356,7 @@ describe('WorkerDashboard', () => {
     let orderRequests = 0;
     let summaryRequests = 0;
     (api.get as Mock).mockImplementation((url: string) => {
-      if (url === '/worker/orders?limit=50') {
+      if (url === '/worker/orders/mine?limit=50') {
         orderRequests += 1;
         return Promise.resolve({
           data: {
@@ -328,8 +372,8 @@ describe('WorkerDashboard', () => {
         summaryRequests += 1;
         return Promise.resolve({
           data: summaryRequests >= 2
-            ? { completedTotal: 11, completedToday: 3, completedThisWeek: 6 }
-            : { completedTotal: 10, completedToday: 2, completedThisWeek: 5 },
+            ? { completedTotal: 11, completedToday: 3, completedThisWeek: 6, claimedCount: 1, availableCount: 2 }
+            : { completedTotal: 10, completedToday: 2, completedThisWeek: 5, claimedCount: 1, availableCount: 3 },
         });
       }
       return Promise.reject(new Error(`Unexpected GET ${url}`));
@@ -339,7 +383,7 @@ describe('WorkerDashboard', () => {
     mountedRoot = root;
     await flushAsyncWork();
 
-    await clickButton(Array.from(container.querySelectorAll<HTMLButtonElement>('button'))[1]);
+    await clickButton(findButton(container, 'Pix 付款码')!);
     expect(readonlyInputValues(container)).toEqual(['pix-old']);
 
     await act(async () => {

@@ -21,7 +21,23 @@ export const createOrderSchema = z.object({
 
 export const batchCodesSchema = z.object({
   count: z.number().int().min(1).max(500),
-  batchLabel: z.string().max(100).optional(),
+  batchLabel: z.string().max(100).trim().transform((value) => value || undefined).optional(),
+});
+
+export const listRedemptionCodesQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  status: z.enum(['all', 'unused', 'used']).default('all'),
+  archiveScope: z.enum(['active', 'archived', 'all']).default('active'),
+  batchLabel: z.string().max(100).trim().transform((value) => value || undefined).optional(),
+  search: z.string().max(100).trim().transform((value) => value || undefined).optional(),
+});
+
+export const archiveUsedCodesSchema = z.object({
+  status: z.enum(['all', 'unused', 'used']).default('all'),
+  archiveScope: z.enum(['active', 'archived', 'all']).default('active'),
+  batchLabel: z.string().max(100).trim().transform((value) => value || undefined).optional(),
+  search: z.string().max(100).trim().transform((value) => value || undefined).optional(),
 });
 
 export const createWorkerSchema = z.object({

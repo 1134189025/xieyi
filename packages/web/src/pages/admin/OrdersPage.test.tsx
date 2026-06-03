@@ -53,7 +53,7 @@ describe('OrdersPage', () => {
     document.body.innerHTML = '';
   });
 
-  it('does not show worker completion ownership', async () => {
+  it('shows worker completion ownership and generation diagnostics', async () => {
     (api.get as Mock).mockResolvedValue({
       data: {
         orders: [
@@ -61,14 +61,34 @@ describe('OrdersPage', () => {
             id: 'order-1',
             trackingToken: 'track-1',
             status: 'PAYMENT_COMPLETED',
-            pixCode: 'pix-code',
             checkoutSessionId: 'cs_test_123',
             errorMessage: null,
+            completedBy: { id: 'worker-1', username: 'worker', displayName: '张三' },
+            claimedBy: { id: 'worker-1', username: 'worker', displayName: '张三' },
+            generationErrorCode: 'ACCOUNT_NOT_ELIGIBLE',
+            generationErrorStage: 'stripe_pix',
+            generationErrorDetail: 'payment_pages amount_due=9900',
+            generationErrorHttpStatus: 400,
             completedAt: '2026-06-01T00:00:00.000Z',
             createdAt: '2026-06-01T00:00:00.000Z',
           },
+          {
+            id: 'order-2',
+            trackingToken: 'track-2',
+            status: 'PENDING_PAYMENT',
+            checkoutSessionId: 'cs_test_456',
+            errorMessage: null,
+            completedBy: null,
+            claimedBy: { id: 'worker-2', username: 'worker2', displayName: '李四' },
+            generationErrorCode: null,
+            generationErrorStage: null,
+            generationErrorDetail: null,
+            generationErrorHttpStatus: null,
+            completedAt: null,
+            createdAt: '2026-06-01T00:05:00.000Z',
+          },
         ],
-        total: 1,
+        total: 2,
       },
     });
 
@@ -77,8 +97,12 @@ describe('OrdersPage', () => {
 
     expect(container.textContent).toContain('订单管理');
     expect(container.textContent).toContain('track-1');
-    expect(container.textContent).not.toContain('工人');
-    expect(container.textContent).not.toContain('张三');
+    expect(container.textContent).toContain('归属工人');
+    expect(container.textContent).toContain('完成：张三');
+    expect(container.textContent).toContain('领取：李四');
+    expect(container.textContent).toContain('失败诊断');
+    expect(container.textContent).toContain('stripe_pix');
+    expect(container.textContent).toContain('payment_pages amount_due=9900');
   });
 
   it('silently refreshes the current orders page every 10 seconds', async () => {
@@ -130,7 +154,6 @@ function orderResponse(overrides: Partial<{
     id: overrides.id ?? 'order-1',
     trackingToken: overrides.trackingToken ?? 'track-1',
     status: overrides.status ?? 'PAYMENT_COMPLETED',
-    pixCode: 'pix-code',
     checkoutSessionId: 'cs_test_123',
     errorMessage: null,
     completedAt: overrides.completedAt ?? null,

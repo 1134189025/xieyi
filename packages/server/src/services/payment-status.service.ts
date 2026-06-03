@@ -1,6 +1,7 @@
 import { retrieveStripeSetupIntentStatus } from '@pix/core';
 import type { Order } from '@prisma/client';
 import { prisma } from '../db.ts';
+import { config } from '../config.ts';
 import { decrypt } from '../utils/crypto.ts';
 import { broadcastOrderStatusChange } from '../ws/index.ts';
 import {
@@ -51,13 +52,12 @@ async function runPixPaymentDetection(): Promise<PixPaymentDetectionResult> {
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     take: PAYMENT_STATUS_CHECK_LIMIT,
   });
-  let completed = 0;
 
-  for (const order of orders) {
+  const results = await runWithConcurrency(orders, config.paymentDetectionConcurrency, async (order) => {
     const stripeProxy = await selectHealthyProxy('stripe');
-    const didComplete = await detectSingleOrderPayment(order, stripeProxy);
-    if (didComplete) completed += 1;
-  }
+    return detectSingleOrderPayment(order, stripeProxy);
+  });
+  const completed = results.filter(Boolean).length;
 
   return { checked: orders.length, completed, disabled: false, skipped: false };
 }
@@ -84,14 +84,21 @@ async function detectSingleOrderPayment(order: Order, stripeProxy: SelectedProxy
     }
 
     const completedAt = new Date();
-    const changed = await prisma.order.updateMany({
-      where: { id: order.id, status: 'PENDING_PAYMENT' },
-      data: {
-        status: 'PAYMENT_COMPLETED',
-        completedAt,
-      },
-    });
-    if (changed.count === 0) return false;
+    const changed = await prisma.$executeRaw`
+      UPDATE "orders"
+      SET
+        "status" = 'PAYMENT_COMPLETED'::"OrderStatus",
+        "completed_at" = ${completedAt},
+        "completed_by_id" = CASE
+          WHEN "claimed_by_id" IS NOT NULL AND "claim_expires_at" > ${completedAt}
+          THEN "claimed_by_id"
+          ELSE NULL
+        END,
+        "updated_at" = NOW()
+      WHERE "id" = ${order.id}
+        AND "status" = 'PENDING_PAYMENT'::"OrderStatus"
+    `;
+    if (changed === 0) return false;
 
     const updatedOrder = await prisma.order.findUnique({ where: { id: order.id } });
     if (updatedOrder) broadcastOrderStatusChange(updatedOrder);
@@ -103,6 +110,28 @@ async function detectSingleOrderPayment(order: Order, stripeProxy: SelectedProxy
     console.warn(`Pix payment status check failed order=${order.id} ${safeStatusCheckLog(error)}`);
     return false;
   }
+}
+
+async function runWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(1, concurrency), items.length);
+
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < items.length) {
+        const currentIndex = nextIndex;
+        nextIndex += 1;
+        results[currentIndex] = await worker(items[currentIndex]);
+      }
+    }),
+  );
+
+  return results;
 }
 
 function safeStatusCheckLog(error: unknown): string {
