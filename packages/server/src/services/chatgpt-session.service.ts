@@ -1,20 +1,11 @@
 import { ProxyAgent } from 'undici';
+import { parseCheckoutSessionId } from '@pix/core';
 import { AppError } from '../middleware/error-handler.ts';
 
 const USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36';
 
-const CHECKOUT_PAYLOAD = {
-  entry_point: 'all_plans_pricing_modal',
-  plan_name: 'chatgptplusplan',
-  billing_details: { country: 'BR', currency: 'BRL' },
-  promo_campaign: {
-    promo_campaign_id: 'plus-1-month-free',
-    is_coupon_from_query_param: false,
-  },
-  checkout_ui_mode: 'redirect',
-};
-
+const OAIPAY_LONG_LINK_URL = process.env.OAIPAY_LONG_LINK_URL?.trim() || 'https://oaipay.im-run.com/api/long-link';
 const DEFAULT_TIMEOUT_MS = 30_000;
 const SESSION_UNRECOGNIZED_MESSAGE =
   '无法识别 ChatGPT Session，请粘贴 accessToken，或包含 accessToken/access_token/at 的 session JSON';
@@ -34,6 +25,13 @@ export interface UpstreamRequestOptions {
 
 export type ChatGptSessionCredential =
   { kind: 'access_token'; accessToken: string };
+
+interface OaiPayLongLinkResponse {
+  ok?: unknown;
+  stripe_hosted_url?: unknown;
+  long_url?: unknown;
+  provider_error?: unknown;
+}
 
 export function isAccessToken(session: string): boolean {
   return isCompactJwt(session.trim());
@@ -99,27 +97,88 @@ export async function createCheckoutUrl(
   requestOptions: number | UpstreamRequestOptions = DEFAULT_TIMEOUT_MS,
 ): Promise<string> {
   const options = normalizeRequestOptions(requestOptions);
-  const response = await fetchWithTimeout('https://chatgpt.com/backend-api/payments/checkout', {
+  const response = await fetchWithTimeout(OAIPAY_LONG_LINK_URL, {
     method: 'POST',
     headers: {
-      authorization: `Bearer ${accessToken}`,
       'content-type': 'application/json',
       'user-agent': USER_AGENT,
     },
-    body: JSON.stringify(CHECKOUT_PAYLOAD),
-  }, options);
+    body: JSON.stringify(buildOaiPayLongLinkRequest(accessToken, options.proxyUrl)),
+  }, options, 'oaipay');
 
   if (!response.ok) {
-    throw new AppError(502, CHECKOUT_FAILED_MESSAGE, 'CHATGPT_CHECKOUT_FAILED');
+    throw checkoutFailedError(response.status, await safeResponseText(response));
   }
 
-  const data = (await response.json()) as Record<string, unknown>;
-  const url = data.url ?? data.checkout_url ?? data.redirect_url;
-  if (typeof url !== 'string' || !url) {
-    throw new AppError(502, CHECKOUT_FAILED_MESSAGE, 'CHATGPT_CHECKOUT_FAILED');
+  const data = await readOaiPayLongLinkResponse(response);
+  if (data.ok !== true) {
+    throw checkoutFailedError(response.status, readProviderError(data));
   }
 
-  return url;
+  return selectCheckoutUrl(data);
+}
+
+function buildOaiPayLongLinkRequest(accessToken: string, proxyUrl: string | null) {
+  return {
+    accessToken,
+    link_type: 'hosted',
+    proxy: proxyUrl ?? '',
+    billing_country: 'BR',
+    checkout_ui_mode: 'hosted',
+    payment_locale: 'pt-BR',
+    stripe_publishable_key: '',
+    device_id: '',
+    user_agent: USER_AGENT,
+  };
+}
+
+async function readOaiPayLongLinkResponse(response: Response): Promise<OaiPayLongLinkResponse> {
+  try {
+    const data = await response.json();
+    return isRecord(data) ? data : {};
+  } catch (error) {
+    throw checkoutFailedError(response.status, error instanceof Error ? error.message : null);
+  }
+}
+
+function selectCheckoutUrl(response: OaiPayLongLinkResponse): string {
+  for (const candidate of [response.stripe_hosted_url, response.long_url]) {
+    if (typeof candidate !== 'string' || !candidate.trim()) continue;
+    const checkoutUrl = candidate.trim();
+    if (isSupportedCheckoutUrl(checkoutUrl)) return checkoutUrl;
+  }
+
+  throw checkoutFailedError(502, 'oaipay response did not include a supported checkout URL');
+}
+
+function isSupportedCheckoutUrl(url: string): boolean {
+  try {
+    parseCheckoutSessionId(url);
+  } catch {
+    return false;
+  }
+
+  const decodedUrl = decodeURIComponent(url);
+  return (
+    /pay\.openai\.com\/c\/pay\/cs_(?:live|test)_/i.test(decodedUrl) ||
+    /api\.stripe\.com\/v1\/payment_pages\/cs_(?:live|test)_[^/?#]+\/confirm/i.test(decodedUrl)
+  );
+}
+
+function readProviderError(response: OaiPayLongLinkResponse): string | null {
+  const providerError = response.provider_error;
+  return typeof providerError === 'string' && providerError.trim() ? providerError.trim() : null;
+}
+
+async function safeResponseText(response: Response): Promise<string | null> {
+  return response.text().catch(() => null);
+}
+
+function checkoutFailedError(httpStatus: number, detail: string | null): AppError {
+  return new AppError(502, CHECKOUT_FAILED_MESSAGE, 'CHATGPT_CHECKOUT_FAILED', {
+    httpStatus,
+    message: detail,
+  });
 }
 
 type RequestInitWithDispatcher = RequestInit & { dispatcher?: unknown };
@@ -143,7 +202,12 @@ function normalizeRequestOptions(options: number | UpstreamRequestOptions): Requ
   };
 }
 
-async function fetchWithTimeout(url: string, init: RequestInit, options: Required<UpstreamRequestOptions>): Promise<Response> {
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  options: Required<UpstreamRequestOptions>,
+  service: string,
+): Promise<Response> {
   const proxyAgent = options.proxyUrl ? new ProxyAgent(options.proxyUrl) : null;
   let lastError: unknown;
 
@@ -152,7 +216,7 @@ async function fetchWithTimeout(url: string, init: RequestInit, options: Require
       const response = await fetchOnce(url, init, options.timeoutMs, proxyAgent);
       if (!response.ok && isRetryableHttpStatus(response.status) && attempt < options.retry.attempts) {
         await response.text().catch(() => '');
-        logRetry('ChatGPT', url, attempt, options.retry.attempts, proxyAgent !== null, response.status);
+        logRetry(service, url, attempt, options.retry.attempts, proxyAgent !== null, response.status);
         await delay(options.retry.backoffMs?.[attempt - 1] ?? options.retry.backoffMs?.at(-1) ?? 0);
         continue;
       }
@@ -162,7 +226,7 @@ async function fetchWithTimeout(url: string, init: RequestInit, options: Require
       if (!isRetryableFetchError(lastError) || attempt >= options.retry.attempts) {
         throw lastError;
       }
-      logRetry('ChatGPT', url, attempt, options.retry.attempts, proxyAgent !== null);
+      logRetry(service, url, attempt, options.retry.attempts, proxyAgent !== null);
       await delay(options.retry.backoffMs?.[attempt - 1] ?? options.retry.backoffMs?.at(-1) ?? 0);
     }
   }
