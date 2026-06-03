@@ -32,6 +32,7 @@ model User {
   updatedAt    DateTime @updatedAt @map("updated_at")
 
   createdCodes    RedemptionCode[] @relation("CreatedBy")
+  claimedOrders   Order[]          @relation("ClaimedBy")
   completedOrders Order[]          @relation("CompletedBy")
 
   @@map("users")
@@ -44,12 +45,15 @@ model RedemptionCode {
   usedAt      DateTime? @map("used_at")
   createdById String    @map("created_by_id")
   createdAt   DateTime  @default(now()) @map("created_at")
+  archivedAt  DateTime? @map("archived_at")
 
   createdBy User   @relation("CreatedBy", fields: [createdById], references: [id])
   order     Order?
 
   @@index([code])
   @@index([createdAt])
+  @@index([batchLabel, usedAt, archivedAt, createdAt])
+  @@index([archivedAt])
   @@map("redemption_codes")
 }
 
@@ -74,13 +78,20 @@ model Order {
   generationStartedAt  DateTime?   @map("generation_started_at")
   generationFinishedAt DateTime?   @map("generation_finished_at")
   generationErrorCode  String?     @map("generation_error_code")
+  generationErrorStage String?      @map("generation_error_stage")
+  generationErrorDetail String?     @map("generation_error_detail")
+  generationErrorHttpStatus Int?    @map("generation_error_http_status")
   submittedRedemptionCode String?  @map("submitted_redemption_code")
+  claimedById          String?      @map("claimed_by_id")
+  claimedAt            DateTime?    @map("claimed_at")
+  claimExpiresAt       DateTime?    @map("claim_expires_at")
   completedById        String?     @map("completed_by_id")
   completedAt          DateTime?   @map("completed_at")
   createdAt            DateTime    @default(now()) @map("created_at")
   updatedAt            DateTime    @updatedAt @map("updated_at")
 
   redemptionCode RedemptionCode? @relation(fields: [redemptionCodeId], references: [id])
+  claimedBy      User?          @relation("ClaimedBy", fields: [claimedById], references: [id])
   completedBy    User?          @relation("CompletedBy", fields: [completedById], references: [id])
 
   @@index([status])
@@ -89,6 +100,10 @@ model Order {
   @@index([createdAt])
   @@index([status, generationQueuedAt, id])
   @@index([generationFinishedAt])
+  @@index([claimedById])
+  @@index([status, claimedById, claimExpiresAt, createdAt, id])
+  @@index([status, claimExpiresAt, createdAt, id])
+  @@index([completedById, completedAt])
   @@map("orders")
 }
 

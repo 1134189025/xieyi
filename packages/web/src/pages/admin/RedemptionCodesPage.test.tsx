@@ -73,19 +73,59 @@ describe('RedemptionCodesPage', () => {
 
     expect(api.get).toHaveBeenCalledTimes(2);
     expect(api.get).toHaveBeenLastCalledWith('/admin/redemption-codes', {
-      params: { status: 'all', page: 1, limit: 20 },
+      params: { status: 'all', archiveScope: 'active', page: 1, limit: 20 },
     });
     expect(container.textContent).toContain('CODE-NEW');
     expect(container.textContent).not.toContain('CODE-OLD');
   });
+
+  it('filters by batch and search and archives used codes with current filters', async () => {
+    (api.get as Mock)
+      .mockResolvedValueOnce({ data: { codes: [codeResponse('CODE-OLD', { batchLabel: 'batch-001', usedAt: '2026-06-01T00:00:00.000Z' })], total: 1 } })
+      .mockResolvedValueOnce({ data: { codes: [], total: 0 } });
+    (api.post as Mock).mockResolvedValue({ data: { archivedCount: 1 } });
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    const { container, root } = await renderRedemptionCodesPage();
+    mountedRoot = root;
+
+    const batchInput = container.querySelector<HTMLInputElement>('input[placeholder="输入批次标签筛选"]');
+    const searchInput = container.querySelector<HTMLInputElement>('input[placeholder="搜索兑换码或批次"]');
+    expect(batchInput).not.toBeNull();
+    expect(searchInput).not.toBeNull();
+
+    await act(async () => {
+      batchInput!.value = 'batch-001';
+      batchInput!.dispatchEvent(new Event('input', { bubbles: true }));
+      searchInput!.value = 'CODE';
+      searchInput!.dispatchEvent(new Event('input', { bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('button[data-testid="archive-used-codes"]')?.dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(api.post).toHaveBeenCalledWith('/admin/redemption-codes/archive-used', {
+      status: 'all',
+      batchLabel: 'batch-001',
+      search: 'CODE',
+      archiveScope: 'active',
+    });
+  });
 });
 
-function codeResponse(code: string) {
+function codeResponse(code: string, overrides: Partial<{ batchLabel: string | null; usedAt: string | null }> = {}) {
   return {
     id: code,
     code,
-    batchLabel: null,
-    usedAt: null,
+    batchLabel: overrides.batchLabel ?? null,
+    usedAt: overrides.usedAt ?? null,
     createdAt: '2026-06-01T00:00:00.000Z',
     order: null,
   };

@@ -34,13 +34,18 @@ vi.mock('../ws/index.ts', () => ({
 }));
 
 const {
+  claimNextPaymentOrder,
   createOrder,
   completeOrder,
+  completeClaimedPaymentOrder,
   failCreatingPaymentOrder,
   getAdminOrders,
   getOrderByTrackingToken,
   getWorkerSummary,
   getWorkerOrders,
+  getWorkerClaimedOrders,
+  releaseClaimedPaymentOrder,
+  renewClaimedPaymentOrder,
 } = await import('./order.service.ts');
 
 describe('order.service', () => {
@@ -191,6 +196,35 @@ describe('order.service', () => {
     expect(broadcastOrderStatusChange).toHaveBeenCalledWith(failedOrder);
   });
 
+  it('stores admin-only generation diagnostics without changing the customer-safe message', async () => {
+    const failedOrder = {
+      id: 'order-1',
+      trackingToken: 'track-1',
+      status: 'FAILED',
+      generationErrorCode: 'PAYMENT_FAILED',
+      generationErrorStage: 'stripe_pix',
+      generationErrorDetail: 'Stripe request failed token=[redacted-token]',
+      generationErrorHttpStatus: 400,
+      errorMessage: '支付创建失败，请稍后重试。',
+      completedAt: null,
+      createdAt: new Date('2026-06-01T00:00:00.000Z'),
+    };
+    prisma.order.findUnique.mockResolvedValue(failedOrder);
+
+    await failCreatingPaymentOrder('order-1', 'PAYMENT_FAILED', {
+      stage: 'stripe_pix',
+      detail: 'Stripe request failed token=eyJ.secret.payload',
+      httpStatus: 400,
+    });
+
+    const rawSqlCall = String(prisma.$executeRaw.mock.calls[0]);
+    expect(rawSqlCall).toContain('stripe_pix');
+    expect(rawSqlCall).toContain('[redacted-token]');
+    expect(rawSqlCall).not.toContain('eyJ.secret.payload');
+    expect(rawSqlCall).toContain('400');
+    expect(rawSqlCall).toContain('支付创建失败，请稍后重试。');
+  });
+
   it('returns a safe customer failure message based on generation error code', async () => {
     prisma.order.findUnique.mockResolvedValue({
       id: 'order-1',
@@ -233,7 +267,7 @@ describe('order.service', () => {
     });
   });
 
-  it('worker queue returns all pending payment orders in stable server order', async () => {
+  it('worker queue returns only unclaimed or expired pending payment orders in stable server order', async () => {
     const firstOrder = {
       id: 'order-1',
       trackingToken: 'track-1',
@@ -262,7 +296,10 @@ describe('order.service', () => {
     });
     expect(prisma.order.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { status: 'PENDING_PAYMENT' },
+        where: {
+          status: 'PENDING_PAYMENT',
+          OR: [{ claimedById: null }, { claimExpiresAt: { lt: expect.any(Date) } }],
+        },
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       }),
     );
@@ -297,7 +334,128 @@ describe('order.service', () => {
     expect(broadcastOrderStatusChange).toHaveBeenCalledWith(completedOrder);
   });
 
-  it('worker summary counts total, today, and this week completions in Asia Shanghai time', async () => {
+  it('claims the next available pending order for the current worker', async () => {
+    const claimedAt = new Date('2026-06-01T00:00:00.000Z');
+    vi.useFakeTimers();
+    vi.setSystemTime(claimedAt);
+    prisma.$queryRaw.mockResolvedValue([{
+      id: 'order-1',
+      trackingToken: 'track-1',
+      status: 'PENDING_PAYMENT',
+      pixCode: 'pix-code',
+      pixQrPng: null,
+      pixExpiresAt: null,
+      pixImageUrl: null,
+      createdAt: claimedAt,
+      claimedById: 'worker-1',
+      claimedAt,
+      claimExpiresAt: new Date('2026-06-01T00:30:00.000Z'),
+    }]);
+
+    await expect(claimNextPaymentOrder('worker-1')).resolves.toMatchObject({
+      id: 'order-1',
+      claimedById: 'worker-1',
+      claimExpiresAt: '2026-06-01T00:30:00.000Z',
+    });
+
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns the current worker claimed orders only', async () => {
+    prisma.order.findMany.mockResolvedValue([{
+      id: 'order-1',
+      trackingToken: 'track-1',
+      status: 'PENDING_PAYMENT',
+      pixCode: 'pix-code',
+      pixQrPng: null,
+      pixExpiresAt: null,
+      pixImageUrl: null,
+      createdAt: new Date('2026-06-01T00:00:00.000Z'),
+      claimedById: 'worker-1',
+      claimedAt: new Date('2026-06-01T00:00:00.000Z'),
+      claimExpiresAt: new Date('2026-06-01T00:30:00.000Z'),
+    }]);
+    prisma.order.count.mockResolvedValue(1);
+
+    const response = await getWorkerClaimedOrders('worker-1', 1, 20);
+
+    expect(response.total).toBe(1);
+    expect(prisma.order.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          status: 'PENDING_PAYMENT',
+          claimedById: 'worker-1',
+          claimExpiresAt: { gt: expect.any(Date) },
+        },
+      }),
+    );
+  });
+
+  it('renews and releases only orders claimed by the current worker', async () => {
+    prisma.order.updateMany.mockResolvedValue({ count: 1 });
+
+    await expect(renewClaimedPaymentOrder('order-1', 'worker-1')).resolves.toMatchObject({
+      id: 'order-1',
+      claimExpiresAt: expect.any(String),
+    });
+    await expect(releaseClaimedPaymentOrder('order-1', 'worker-1')).resolves.toEqual({
+      id: 'order-1',
+      released: true,
+    });
+
+    expect(prisma.order.updateMany).toHaveBeenNthCalledWith(1, {
+      where: {
+        id: 'order-1',
+        status: 'PENDING_PAYMENT',
+        claimedById: 'worker-1',
+        claimExpiresAt: { gt: expect.any(Date) },
+      },
+      data: { claimExpiresAt: expect.any(Date) },
+    });
+    expect(prisma.order.updateMany).toHaveBeenNthCalledWith(2, {
+      where: { id: 'order-1', status: 'PENDING_PAYMENT', claimedById: 'worker-1' },
+      data: { claimedById: null, claimedAt: null, claimExpiresAt: null },
+    });
+  });
+
+  it('completes only the current worker claimed order and records completedById', async () => {
+    const completedAt = new Date('2026-06-01T00:00:00.000Z');
+    vi.useFakeTimers();
+    vi.setSystemTime(completedAt);
+    const completedOrder = {
+      id: 'order-1',
+      trackingToken: 'track-1',
+      status: 'PAYMENT_COMPLETED',
+      completedAt,
+      completedById: 'worker-1',
+    };
+    prisma.order.updateMany.mockResolvedValue({ count: 1 });
+    prisma.order.findUnique.mockResolvedValue(completedOrder);
+
+    await expect(completeClaimedPaymentOrder('order-1', 'worker-1')).resolves.toEqual({
+      id: 'order-1',
+      status: 'PAYMENT_COMPLETED',
+      completedAt: completedAt.toISOString(),
+      completedById: 'worker-1',
+    });
+
+    expect(prisma.order.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'order-1',
+        status: 'PENDING_PAYMENT',
+        claimedById: 'worker-1',
+        claimExpiresAt: { gt: completedAt },
+      },
+      data: {
+        status: 'PAYMENT_COMPLETED',
+        completedAt,
+        completedById: 'worker-1',
+      },
+    });
+    expect(broadcastOrderStatusChange).toHaveBeenCalledWith(completedOrder);
+  });
+
+  it('worker summary counts only the current worker completions in Asia Shanghai time', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-06-03T10:30:00.000Z'));
     prisma.order.count
@@ -305,14 +463,19 @@ describe('order.service', () => {
       .mockResolvedValueOnce(2)
       .mockResolvedValueOnce(5);
 
-    await expect(getWorkerSummary()).resolves.toEqual({
+    await expect(getWorkerSummary('worker-1')).resolves.toEqual({
       completedTotal: 10,
       completedToday: 2,
       completedThisWeek: 5,
+      claimedCount: 0,
+      availableCount: 0,
+    });
+    expect(prisma.order.count).toHaveBeenNthCalledWith(1, {
+      where: { status: 'PAYMENT_COMPLETED', completedById: 'worker-1' },
     });
   });
 
-  it('admin orders do not expose worker completion ownership', async () => {
+  it('admin orders expose worker ownership and generation diagnostics', async () => {
     prisma.order.findMany.mockResolvedValue([{
       id: 'order-1',
       trackingToken: 'track-1',
@@ -320,6 +483,12 @@ describe('order.service', () => {
       pixCode: 'pix-code',
       checkoutSessionId: 'cs_test_123',
       errorMessage: null,
+      generationErrorCode: 'ACCOUNT_NOT_ELIGIBLE',
+      generationErrorStage: 'stripe_pix',
+      generationErrorDetail: 'payment_pages amount_due=9900',
+      generationErrorHttpStatus: 400,
+      completedBy: { id: 'worker-1', username: 'worker', displayName: '工人' },
+      claimedBy: { id: 'worker-1', username: 'worker', displayName: '工人' },
       completedAt: new Date('2026-06-01T00:00:00.000Z'),
       createdAt: new Date('2026-06-01T00:00:00.000Z'),
     }]);
@@ -327,6 +496,14 @@ describe('order.service', () => {
 
     const response = await getAdminOrders({ page: 1, limit: 50 });
 
-    expect(response.orders[0]).not.toHaveProperty('completedBy');
+    expect(response.orders[0]).toMatchObject({
+      completedBy: { id: 'worker-1', username: 'worker', displayName: '工人' },
+      claimedBy: { id: 'worker-1', username: 'worker', displayName: '工人' },
+      generationErrorCode: 'ACCOUNT_NOT_ELIGIBLE',
+      generationErrorStage: 'stripe_pix',
+      generationErrorDetail: 'payment_pages amount_due=9900',
+      generationErrorHttpStatus: 400,
+    });
+    expect(response.orders[0]).not.toHaveProperty('pixCode');
   });
 });

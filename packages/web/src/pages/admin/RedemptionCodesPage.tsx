@@ -11,6 +11,7 @@ interface CodeItem {
   code: string;
   batchLabel: string | null;
   usedAt: string | null;
+  archivedAt: string | null;
   createdAt: string;
   order: { id: string; trackingToken: string; status: string } | null;
 }
@@ -24,8 +25,12 @@ export default function RedemptionCodesPage() {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [filter, setFilter] = useState<'all' | 'unused' | 'used'>('all');
+  const [archiveScope, setArchiveScope] = useState<'active' | 'archived' | 'all'>('active');
+  const [batchLabelFilter, setBatchLabelFilter] = useState('');
+  const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
+  const [archiving, setArchiving] = useState(false);
   const [count, setCount] = useState(10);
   const [batchLabel, setBatchLabel] = useState('');
   const [error, setError] = useState('');
@@ -36,7 +41,14 @@ export default function RedemptionCodesPage() {
     }
     try {
       const res = await api.get('/admin/redemption-codes', {
-        params: { status: filter, page, limit: 20 },
+        params: {
+          status: filter,
+          archiveScope,
+          batchLabel: batchLabelFilter || undefined,
+          search: search || undefined,
+          page,
+          limit: 20,
+        },
       });
       setCodes(res.data.codes);
       setTotal(res.data.total);
@@ -54,7 +66,7 @@ export default function RedemptionCodesPage() {
 
   useEffect(() => {
     void fetchCodes();
-  }, [page, filter]);
+  }, [page, filter, archiveScope, batchLabelFilter, search]);
 
   useAutoRefresh(() => fetchCodes({ silent: true }), AUTO_REFRESH_INTERVAL_MS);
 
@@ -86,6 +98,36 @@ export default function RedemptionCodesPage() {
       fetchCodes();
     } catch {
       toast.error('删除兑换码失败');
+    }
+  };
+
+  const handleArchive = async (id: string) => {
+    if (!confirm('确认归档这个已使用兑换码？归档后默认列表不再显示。')) return;
+    try {
+      await api.post(`/admin/redemption-codes/${id}/archive`);
+      toast.success('兑换码已归档');
+      fetchCodes();
+    } catch {
+      toast.error('归档兑换码失败');
+    }
+  };
+
+  const handleArchiveUsed = async () => {
+    if (!confirm('确认按当前筛选归档已使用兑换码？')) return;
+    setArchiving(true);
+    try {
+      const res = await api.post('/admin/redemption-codes/archive-used', {
+        status: filter,
+        batchLabel: batchLabelFilter || undefined,
+        search: search || undefined,
+        archiveScope,
+      });
+      toast.success(`已归档 ${res.data.archivedCount ?? 0} 个已使用兑换码`);
+      fetchCodes();
+    } catch {
+      toast.error('批量归档失败');
+    } finally {
+      setArchiving(false);
     }
   };
 
@@ -170,6 +212,41 @@ export default function RedemptionCodesPage() {
               {f === 'all' ? '全部' : f === 'unused' ? '未使用' : '已使用'}
             </button>
           ))}
+          <span className="text-sm text-app-secondary">归档：</span>
+          {(['active', 'archived', 'all'] as const).map((scope) => (
+            <button
+              key={scope}
+              onClick={() => { setArchiveScope(scope); setPage(1); }}
+              className={`px-3 py-1 text-sm rounded-full ${
+                archiveScope === scope ? 'bg-app-accent text-white' : 'text-app-secondary hover:bg-neutral-100'
+              }`}
+            >
+              {scope === 'active' ? '未归档' : scope === 'archived' ? '已归档' : '全部'}
+            </button>
+          ))}
+          <input
+            type="text"
+            value={batchLabelFilter}
+            onInput={(event) => { setBatchLabelFilter(event.currentTarget.value); setPage(1); }}
+            placeholder="输入批次标签筛选"
+            className="w-full rounded-lg border border-app-border px-3 py-2 text-sm outline-none focus:border-app-accent sm:w-44"
+          />
+          <input
+            type="search"
+            value={search}
+            onInput={(event) => { setSearch(event.currentTarget.value); setPage(1); }}
+            placeholder="搜索兑换码或批次"
+            className="w-full rounded-lg border border-app-border px-3 py-2 text-sm outline-none focus:border-app-accent sm:w-44"
+          />
+          <button
+            type="button"
+            data-testid="archive-used-codes"
+            onClick={handleArchiveUsed}
+            disabled={archiving}
+            className="rounded-lg bg-neutral-900 px-3 py-2 text-sm text-white hover:bg-neutral-700 disabled:opacity-50"
+          >
+            {archiving ? '归档中...' : '归档已使用'}
+          </button>
           <span className="w-full text-sm text-app-secondary sm:ml-auto sm:w-auto">共 {total} 条</span>
         </div>
 
@@ -187,6 +264,7 @@ export default function RedemptionCodesPage() {
                   <th className="px-6 py-3 text-left font-medium text-app-secondary">兑换码</th>
                   <th className="px-6 py-3 text-left font-medium text-app-secondary">批次</th>
                   <th className="px-6 py-3 text-left font-medium text-app-secondary">状态</th>
+                  <th className="px-6 py-3 text-left font-medium text-app-secondary">归档</th>
                   <th className="px-6 py-3 text-left font-medium text-app-secondary">创建时间</th>
                   <th className="px-6 py-3 text-right font-medium text-app-secondary">操作</th>
                 </tr>
@@ -208,6 +286,9 @@ export default function RedemptionCodesPage() {
                       )}
                     </td>
                     <td className="px-6 py-3 text-app-secondary">
+                      {code.archivedAt ? '已归档' : '未归档'}
+                    </td>
+                    <td className="px-6 py-3 text-app-secondary">
                       {new Date(code.createdAt).toLocaleString('zh-CN')}
                     </td>
                     <td className="px-6 py-3 text-right space-x-2">
@@ -225,6 +306,15 @@ export default function RedemptionCodesPage() {
                           title="删除"
                         >
                           <Trash2 size={14} />
+                        </button>
+                      )}
+                      {code.usedAt && !code.archivedAt && (
+                        <button
+                          onClick={() => handleArchive(code.id)}
+                          className="p-1 text-gray-400 hover:text-amber-600"
+                          title="归档"
+                        >
+                          归档
                         </button>
                       )}
                     </td>

@@ -5,6 +5,7 @@ export class AppError extends Error {
     public statusCode: number,
     message: string,
     public code?: string,
+    public diagnostic?: { httpStatus?: number | null; message?: string | null },
   ) {
     super(message);
   }

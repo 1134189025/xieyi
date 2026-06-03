@@ -28,12 +28,35 @@ interface DashboardData {
     activeCount: number;
     failedCount: number;
     oldestWaitingSeconds: number | null;
+    pixWorkerConcurrency: number;
+    paymentDetectionConcurrency: number;
     averageGenerationSeconds: number;
     successRateLastHour: number;
   };
   proxyHealth: {
     chatGpt: ProxyHealthGroup;
     stripe: ProxyHealthGroup;
+  };
+  workerPerformance: {
+    totalWorkers: number;
+    enabledWorkers: number;
+    claimedOrders: number;
+    unclaimedPendingOrders: number;
+    assignedCompletedToday: number;
+    assignedCompletedThisWeek: number;
+    unassignedCompletedToday: number;
+    unassignedCompletedThisWeek: number;
+    topWorkers: Array<{
+      id: string;
+      username: string;
+      displayName: string | null;
+      enabled: boolean;
+      completedTotal: number;
+      completedToday: number;
+      completedThisWeek: number;
+      claimedCount: number;
+      lastCompletedAt: string | null;
+    }>;
   };
   dailyTrend: Array<{ date: string; created: number; completed: number; failed: number }>;
 }
@@ -131,10 +154,51 @@ export default function AdminDashboard() {
       <div className="mb-8 grid grid-cols-1 gap-4 lg:grid-cols-3">
         <OperationalNote
           title={`最老等待 ${formatMinutes(data.queue.oldestWaitingSeconds)} 分钟`}
-          body={`平均生成耗时 ${formatSeconds(data.queue.averageGenerationSeconds)}，近 1 小时成功率 ${data.queue.successRateLastHour}%`}
+          body={`生成并发 ${data.queue.pixWorkerConcurrency}，检测并发 ${data.queue.paymentDetectionConcurrency}，平均生成耗时 ${formatSeconds(data.queue.averageGenerationSeconds)}，近 1 小时成功率 ${data.queue.successRateLastHour}%`}
         />
         <ProxyHealthCard title="ChatGPT 代理" health={data.proxyHealth.chatGpt} />
         <ProxyHealthCard title="Stripe 代理" health={data.proxyHealth.stripe} />
+      </div>
+
+      <div className="mb-8 rounded-xl border border-app-border bg-app-surface p-4 shadow-checkout sm:p-6">
+        <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h3 className="text-lg font-semibold">工人绩效</h3>
+            <p className="text-sm text-app-secondary">
+              启用工人 {data.workerPerformance.enabledWorkers} / {data.workerPerformance.totalWorkers}
+            </p>
+          </div>
+          <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+            <span>已领取 {data.workerPerformance.claimedOrders}</span>
+            <span>未领取 {data.workerPerformance.unclaimedPendingOrders}</span>
+            <span>归属今日 {data.workerPerformance.assignedCompletedToday}</span>
+            <span>未归属今日 {data.workerPerformance.unassignedCompletedToday}</span>
+          </div>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="min-w-[640px] w-full text-sm">
+            <thead className="bg-neutral-50">
+              <tr>
+                <th className="px-4 py-2 text-left font-medium text-app-secondary">工人</th>
+                <th className="px-4 py-2 text-left font-medium text-app-secondary">今日</th>
+                <th className="px-4 py-2 text-left font-medium text-app-secondary">本周</th>
+                <th className="px-4 py-2 text-left font-medium text-app-secondary">总完成</th>
+                <th className="px-4 py-2 text-left font-medium text-app-secondary">已领取</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-app-border">
+              {data.workerPerformance.topWorkers.map((worker) => (
+                <tr key={worker.id}>
+                  <td className="px-4 py-2">{worker.displayName ?? worker.username}</td>
+                  <td className="px-4 py-2">今日 {worker.completedToday} 单</td>
+                  <td className="px-4 py-2">{worker.completedThisWeek}</td>
+                  <td className="px-4 py-2">{worker.completedTotal}</td>
+                  <td className="px-4 py-2">{worker.claimedCount}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <div className="rounded-xl border border-app-border bg-app-surface p-4 shadow-checkout sm:p-6">

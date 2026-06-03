@@ -1,6 +1,13 @@
 import { Router } from 'express';
 import { authenticate, authorize } from '../middleware/auth.ts';
-import { batchCreateCodes, listCodes, deleteCode } from '../services/redemption-code.service.ts';
+import {
+  archiveCode,
+  archiveUsedCodes,
+  batchCreateCodes,
+  deleteCode,
+  listCodeBatches,
+  listCodes,
+} from '../services/redemption-code.service.ts';
 import { createWorker, listWorkers, updateWorker, deleteWorker } from '../services/worker.service.ts';
 import { getAdminOrders, cancelOrder } from '../services/order.service.ts';
 import { getDashboardStats } from '../services/dashboard.service.ts';
@@ -14,7 +21,9 @@ import {
 } from '../services/settings.service.ts';
 import {
   batchCodesSchema,
+  archiveUsedCodesSchema,
   createWorkerSchema,
+  listRedemptionCodesQuerySchema,
   updateWorkerSchema,
   updateOrderSchema,
   updateAutoPaymentDetectionSettingSchema,
@@ -43,12 +52,38 @@ router.post('/redemption-codes', async (req, res, next) => {
 
 router.get('/redemption-codes', async (req, res, next) => {
   try {
-    const status = (req.query.status as string) || 'all';
-    const batchLabel = req.query.batchLabel as string | undefined;
-    const page = Math.max(1, Number(req.query.page) || 1);
-    const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
-    const result = await listCodes({ status: status as 'unused' | 'used' | 'all', batchLabel, page, limit });
+    const parsed = listRedemptionCodesQuerySchema.safeParse(req.query);
+    if (!parsed.success) throw new AppError(400, 'Invalid input');
+    const result = await listCodes(parsed.data);
     res.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/redemption-code-batches', async (_req, res, next) => {
+  try {
+    const batches = await listCodeBatches();
+    res.json({ batches });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/redemption-codes/archive-used', async (req, res, next) => {
+  try {
+    const parsed = archiveUsedCodesSchema.safeParse(req.body);
+    if (!parsed.success) throw new AppError(400, 'Invalid input');
+
+    res.json(await archiveUsedCodes(parsed.data));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/redemption-codes/:id/archive', async (req, res, next) => {
+  try {
+    res.json(await archiveCode(req.params.id));
   } catch (error) {
     next(error);
   }

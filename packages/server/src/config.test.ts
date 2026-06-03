@@ -11,6 +11,7 @@ const validEnv = {
   CORS_ORIGIN: 'http://localhost:5173',
   REDIS_URL: 'redis://127.0.0.1:6379',
   PIX_WORKER_CONCURRENCY: '5',
+  PAYMENT_DETECTION_CONCURRENCY: '5',
   CREATE_ORDER_RATE_LIMIT_PER_MIN: '30',
 };
 
@@ -39,8 +40,15 @@ describe('loadConfig', () => {
       corsOrigin: validEnv.CORS_ORIGIN,
       redisUrl: validEnv.REDIS_URL,
       pixWorkerConcurrency: 5,
+      paymentDetectionConcurrency: 5,
       createOrderRateLimitPerMin: 30,
       port: 3000,
     });
+  });
+
+  it('拒绝非法自动检测并发配置', () => {
+    expect(() => loadConfig({ ...validEnv, PAYMENT_DETECTION_CONCURRENCY: '0' })).toThrow(
+      /PAYMENT_DETECTION_CONCURRENCY/,
+    );
   });
 });

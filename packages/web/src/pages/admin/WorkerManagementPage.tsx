@@ -10,6 +10,11 @@ interface WorkerItem {
   username: string;
   displayName: string | null;
   enabled: boolean;
+  completedTotal: number;
+  completedToday: number;
+  completedThisWeek: number;
+  claimedCount: number;
+  lastCompletedAt: string | null;
   createdAt: string;
 }
 
@@ -146,12 +151,17 @@ export default function WorkerManagementPage() {
           <div className="py-10 text-center text-app-secondary">{error}</div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="min-w-[640px] w-full text-sm">
+            <table className="min-w-[960px] w-full text-sm">
               <thead className="bg-neutral-50">
                 <tr>
                   <th className="px-6 py-3 text-left font-medium text-app-secondary">用户名</th>
                   <th className="px-6 py-3 text-left font-medium text-app-secondary">显示名称</th>
                   <th className="px-6 py-3 text-left font-medium text-app-secondary">状态</th>
+                  <th className="px-6 py-3 text-left font-medium text-app-secondary">今日完成</th>
+                  <th className="px-6 py-3 text-left font-medium text-app-secondary">本周完成</th>
+                  <th className="px-6 py-3 text-left font-medium text-app-secondary">总完成</th>
+                  <th className="px-6 py-3 text-left font-medium text-app-secondary">已领取</th>
+                  <th className="px-6 py-3 text-left font-medium text-app-secondary">最近完成</th>
                   <th className="px-6 py-3 text-left font-medium text-app-secondary">创建时间</th>
                   <th className="px-6 py-3 text-right font-medium text-app-secondary">操作</th>
                 </tr>
@@ -167,6 +177,13 @@ export default function WorkerManagementPage() {
                       ) : (
                         <span className="px-2 py-0.5 text-xs bg-red-100 text-red-700 rounded-full">禁用</span>
                       )}
+                    </td>
+                    <td className="px-6 py-3 text-app-secondary">{worker.completedToday}</td>
+                    <td className="px-6 py-3 text-app-secondary">{worker.completedThisWeek}</td>
+                    <td className="px-6 py-3 text-app-secondary">{worker.completedTotal}</td>
+                    <td className="px-6 py-3 text-app-secondary">{worker.claimedCount}</td>
+                    <td className="px-6 py-3 text-app-secondary">
+                      {worker.lastCompletedAt ? new Date(worker.lastCompletedAt).toLocaleString('zh-CN') : '-'}
                     </td>
                     <td className="px-6 py-3 text-app-secondary">
                       {new Date(worker.createdAt).toLocaleDateString('zh-CN')}

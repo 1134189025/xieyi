@@ -76,6 +76,8 @@ describe('AdminDashboard', () => {
           activeCount: 2,
           failedCount: 3,
           oldestWaitingSeconds: 420,
+          pixWorkerConcurrency: 5,
+          paymentDetectionConcurrency: 5,
           averageGenerationSeconds: 180,
           successRateLastHour: 75,
         },
@@ -84,6 +86,7 @@ describe('AdminDashboard', () => {
           stripe: { total: 4, healthy: 4, coolingDown: 0 },
         },
         dailyTrend: [],
+        workerPerformance: workerPerformanceResponse(),
       },
     });
 
@@ -100,7 +103,12 @@ describe('AdminDashboard', () => {
     expect(container.textContent).toContain('近 1 小时成功率 75%');
     expect(container.textContent).toContain('ChatGPT 代理');
     expect(container.textContent).toContain('Stripe 代理');
-    expect(container.textContent).not.toContain('工人绩效');
+    expect(container.textContent).toContain('工人绩效');
+    expect(container.textContent).toContain('启用工人 1 / 2');
+    expect(container.textContent).toContain('归属今日 2');
+    expect(container.textContent).toContain('未归属今日 1');
+    expect(container.textContent).toContain('工人');
+    expect(container.textContent).toContain('今日 2 单');
   });
 
   it('silently refreshes dashboard data every 10 seconds', async () => {
@@ -150,6 +158,8 @@ function dashboardResponse(overrides: Partial<{
       activeCount: 2,
       failedCount: 3,
       oldestWaitingSeconds: 420,
+      pixWorkerConcurrency: 5,
+      paymentDetectionConcurrency: 5,
       averageGenerationSeconds: 180,
       successRateLastHour: 75,
     },
@@ -157,6 +167,33 @@ function dashboardResponse(overrides: Partial<{
       chatGpt: { total: 3, healthy: 2, coolingDown: 1 },
       stripe: { total: 4, healthy: 4, coolingDown: 0 },
     },
+    workerPerformance: workerPerformanceResponse(),
     dailyTrend: [],
+  };
+}
+
+function workerPerformanceResponse() {
+  return {
+    totalWorkers: 2,
+    enabledWorkers: 1,
+    claimedOrders: 3,
+    unclaimedPendingOrders: 4,
+    assignedCompletedToday: 2,
+    assignedCompletedThisWeek: 7,
+    unassignedCompletedToday: 1,
+    unassignedCompletedThisWeek: 3,
+    topWorkers: [
+      {
+        id: 'worker-1',
+        username: 'worker',
+        displayName: '工人',
+        enabled: true,
+        completedTotal: 12,
+        completedToday: 2,
+        completedThisWeek: 7,
+        claimedCount: 1,
+        lastCompletedAt: '2026-06-03T01:00:00.000Z',
+      },
+    ],
   };
 }
