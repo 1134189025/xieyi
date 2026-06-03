@@ -102,27 +102,66 @@ describe('chatgpt-session.service', () => {
     });
   });
 
-  it('ChatGPT checkout 瞬时 502 会按配置重试', async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce({ ok: false, status: 502, text: async () => 'bad gateway' })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ url: 'https://pay.openai.com/c/pay/cs_test_123' }) });
+  it('通过 oaipay 生成 hosted 长链接并透传代理', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        stripe_hosted_url: 'https://pay.openai.com/c/pay/cs_test_oaipay_123',
+        long_url: 'https://pay.openai.com/c/pay/cs_test_fallback_456',
+      }),
+    });
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(
       createCheckoutUrl(ACCESS_TOKEN, {
-        retry: { attempts: 3, backoffMs: [0, 0] },
+        proxyUrl: 'http://user:pass@proxy.example:10000',
+        retry: { attempts: 1 },
       }),
-    ).resolves.toBe('https://pay.openai.com/c/pay/cs_test_123');
+    ).resolves.toBe('https://pay.openai.com/c/pay/cs_test_oaipay_123');
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://oaipay.im-run.com/api/long-link',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          accessToken: ACCESS_TOKEN,
+          link_type: 'hosted',
+          proxy: 'http://user:pass@proxy.example:10000',
+          billing_country: 'BR',
+          checkout_ui_mode: 'hosted',
+          payment_locale: 'pt-BR',
+          stripe_publishable_key: '',
+          device_id: '',
+          user_agent:
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36',
+        }),
+      }),
+    );
   });
 
-  it('ChatGPT checkout 401 业务错误不重试', async () => {
+  it('oaipay 只返回 provider 链接时不进入后续 Pix 协议', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        provider_redirect_url: 'https://provider.example/pay/redirect',
+        long_url: 'https://provider.example/pay/redirect',
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(createCheckoutUrl(ACCESS_TOKEN)).rejects.toMatchObject({
+      statusCode: 502,
+      code: 'CHATGPT_CHECKOUT_FAILED',
+    });
+  });
+
+  it('oaipay 业务失败不重试', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: false,
       status: 401,
-      text: async () => 'unauthorized',
+      text: async () => 'checkout create failed: invalid token',
     });
     vi.stubGlobal('fetch', fetchMock);
 
@@ -135,5 +174,43 @@ describe('chatgpt-session.service', () => {
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('oaipay 瞬时 502 会按配置重试', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 502, text: async () => 'bad gateway' })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          stripe_hosted_url: 'https://pay.openai.com/c/pay/cs_test_123',
+        }),
+      });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      createCheckoutUrl(ACCESS_TOKEN, {
+        retry: { attempts: 3, backoffMs: [0, 0] },
+      }),
+    ).resolves.toBe('https://pay.openai.com/c/pay/cs_test_123');
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('oaipay 超时会转换为可重试错误', async () => {
+    const abortError = new DOMException('The operation was aborted.', 'AbortError');
+    const fetchMock = vi.fn().mockRejectedValue(abortError);
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      createCheckoutUrl(ACCESS_TOKEN, {
+        timeoutMs: 1,
+        retry: { attempts: 1, backoffMs: [0] },
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 504,
+      code: 'UPSTREAM_TIMEOUT',
+    });
   });
 });
