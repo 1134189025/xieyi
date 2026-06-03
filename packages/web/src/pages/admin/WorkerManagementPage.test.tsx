@@ -13,6 +13,7 @@ vi.mock('../../api/client', () => ({
     get: vi.fn(),
     post: vi.fn(),
     patch: vi.fn(),
+    delete: vi.fn(),
   },
 }));
 
@@ -114,18 +115,75 @@ describe('WorkerManagementPage', () => {
     expect(container.textContent).toContain('worker-new');
     expect(container.textContent).not.toContain('worker-old');
   });
+
+  it('deletes a worker account after confirmation and refreshes the list', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    (api.get as Mock)
+      .mockResolvedValueOnce({
+        data: {
+          workers: [workerResponse({ id: 'worker-1', username: 'worker-delete' })],
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          workers: [],
+        },
+      });
+    (api.delete as Mock).mockResolvedValue({});
+
+    const { container, root } = await renderWorkerManagement();
+    mountedRoot = root;
+
+    const deleteButton = container.querySelector('button[title="删除工人"]') as HTMLButtonElement | null;
+    expect(deleteButton).not.toBeNull();
+
+    await act(async () => {
+      deleteButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(window.confirm).toHaveBeenCalledWith('确认删除工人「worker-delete」？该账号将不可登录，历史订单归属会保留。');
+    expect(api.delete).toHaveBeenCalledWith('/admin/workers/worker-1');
+    expect(api.get).toHaveBeenCalledTimes(2);
+    expect(container.textContent).not.toContain('worker-delete');
+  });
+
+  it('renders disabled workers with zero active claimed orders from the refreshed data', async () => {
+    (api.get as Mock).mockResolvedValue({
+      data: {
+        workers: [
+          workerResponse({
+            id: 'worker-disabled',
+            username: 'disabled-worker',
+            enabled: false,
+            claimedCount: 0,
+          }),
+        ],
+      },
+    });
+
+    const { container, root } = await renderWorkerManagement();
+    mountedRoot = root;
+
+    expect(container.textContent).toContain('disabled-worker');
+    expect(container.textContent).toContain('禁用');
+    expect(container.textContent).not.toContain('已领取 1');
+  });
 });
 
-function workerResponse(overrides: Partial<{ id: string; username: string }> = {}) {
+function workerResponse(
+  overrides: Partial<{ id: string; username: string; enabled: boolean; claimedCount: number }> = {},
+) {
   return {
     id: overrides.id ?? 'worker-1',
     username: overrides.username ?? 'worker',
-    displayName: '宸ヤ汉',
-    enabled: true,
+    displayName: '工人',
+    enabled: overrides.enabled ?? true,
     completedTotal: 12,
     completedToday: 2,
     completedThisWeek: 7,
-    claimedCount: 1,
+    claimedCount: overrides.claimedCount ?? 1,
     lastCompletedAt: '2026-06-03T01:00:00.000Z',
     createdAt: '2026-06-01T00:00:00.000Z',
   };

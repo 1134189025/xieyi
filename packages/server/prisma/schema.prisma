@@ -28,6 +28,7 @@ model User {
   role         UserRole
   displayName  String?  @map("display_name")
   enabled      Boolean  @default(true)
+  deletedAt    DateTime? @map("deleted_at")
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
@@ -35,6 +36,7 @@ model User {
   claimedOrders   Order[]          @relation("ClaimedBy")
   completedOrders Order[]          @relation("CompletedBy")
 
+  @@index([role, deletedAt, createdAt])
   @@map("users")
 }
 

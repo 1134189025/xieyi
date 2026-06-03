@@ -38,6 +38,7 @@ describe('dashboard.service', () => {
         username: 'worker',
         displayName: '工人',
         enabled: true,
+        deletedAt: null,
         createdAt: new Date('2026-06-01T00:00:00.000Z'),
       },
     ]);
@@ -131,7 +132,7 @@ describe('dashboard.service', () => {
       },
     });
     expect(prisma.user.findMany).toHaveBeenCalledWith({
-      where: { role: 'WORKER' },
+      where: { role: 'WORKER', deletedAt: null },
       orderBy: { createdAt: 'desc' },
     });
     expect(prisma.order.count).toHaveBeenNthCalledWith(3, {
@@ -155,5 +156,44 @@ describe('dashboard.service', () => {
         },
       },
     });
+  });
+
+  it('keeps disabled workers out of dashboard top workers', async () => {
+    prisma.$queryRaw
+      .mockReset()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ average_seconds: null }]);
+    prisma.order.count.mockReset().mockResolvedValue(0);
+    prisma.redemptionCode.count.mockReset().mockResolvedValue(0);
+    prisma.order.findFirst.mockResolvedValue(null);
+    prisma.user.findMany.mockResolvedValue([
+      {
+        id: 'worker-enabled',
+        username: 'enabled-worker',
+        displayName: '启用工人',
+        enabled: true,
+        deletedAt: null,
+        createdAt: new Date('2026-06-02T00:00:00.000Z'),
+      },
+      {
+        id: 'worker-disabled',
+        username: 'disabled-worker',
+        displayName: '禁用工人',
+        enabled: false,
+        deletedAt: null,
+        createdAt: new Date('2026-06-01T00:00:00.000Z'),
+      },
+    ]);
+
+    const stats = await getDashboardStats();
+
+    expect(stats.workerPerformance.totalWorkers).toBe(2);
+    expect(stats.workerPerformance.enabledWorkers).toBe(1);
+    expect(stats.workerPerformance.topWorkers).toEqual([
+      expect.objectContaining({
+        id: 'worker-enabled',
+        enabled: true,
+      }),
+    ]);
   });
 });

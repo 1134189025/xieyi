@@ -3,7 +3,7 @@ import { getShanghaiDayRange, getShanghaiWeekRange } from '../utils/shanghai-tim
 import { getPixGenerationQueueMetrics } from '../queues/pix-generation.queue.ts';
 import { getProxyPoolHealthSummary } from './settings.service.ts';
 import { config } from '../config.ts';
-import { listWorkers } from './worker.service.ts';
+import { listWorkerAccountsForManagement } from './worker.service.ts';
 
 export async function getDashboardStats() {
   const shanghaiDayRange = getShanghaiDayRange(new Date());
@@ -139,7 +139,7 @@ async function getWorkerPerformanceStats(
     unassignedCompletedToday,
     unassignedCompletedThisWeek,
   ] = await Promise.all([
-    listWorkers(),
+    listWorkerAccountsForManagement(),
     prisma.order.count({
       where: {
         status: 'PENDING_PAYMENT',
@@ -192,7 +192,8 @@ async function getWorkerPerformanceStats(
     assignedCompletedThisWeek,
     unassignedCompletedToday,
     unassignedCompletedThisWeek,
-    topWorkers: [...workers]
+    topWorkers: workers
+      .filter((worker) => worker.enabled)
       .sort((first, second) => second.completedToday - first.completedToday || second.completedTotal - first.completedTotal)
       .slice(0, 10),
   };

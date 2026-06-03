@@ -7,7 +7,7 @@ import type { JwtPayload } from '../middleware/auth.ts';
 
 export async function login(username: string, password: string) {
   const user = await prisma.user.findUnique({ where: { username } });
-  if (!user || !user.enabled) {
+  if (!user || !user.enabled || user.deletedAt) {
     throw new AppError(401, 'Invalid credentials');
   }
 
@@ -32,7 +32,7 @@ export async function login(username: string, password: string) {
 
 export async function getCurrentUser(userId: string) {
   const user = await prisma.user.findUnique({ where: { id: userId } });
-  if (!user || !user.enabled) {
+  if (!user || !user.enabled || user.deletedAt) {
     throw new AppError(401, 'Invalid or expired token');
   }
 
