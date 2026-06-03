@@ -6,6 +6,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import api from '../../api/client';
 import WorkerDashboard from './WorkerDashboard';
+import toast from 'react-hot-toast';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -178,7 +179,7 @@ describe('WorkerDashboard', () => {
     document.body.innerHTML = '';
   });
 
-  it('显示我的计数、可领取数量和领取任务按钮', async () => {
+  it('显示我的计数、可领取数量和领取 10 单按钮', async () => {
     mockDashboardLoad([workerOrder()]);
 
     const { container, root } = renderWorkerDashboard();
@@ -190,12 +191,12 @@ describe('WorkerDashboard', () => {
     expect(container.textContent).toContain('我的本周 5 单');
     expect(container.textContent).toContain('可领取 3 单');
     expect(container.textContent).toContain('#1');
-    expect(findButton(container, '领取任务')).not.toBeNull();
+    expect(findButton(container, '领取 10 单')).not.toBeNull();
     expect(findButton(container, '标记为已完成')).not.toBeNull();
     expect(container.textContent).not.toContain('track-1');
   });
 
-  it('点击领取任务后调用领取接口并刷新我的任务和计数', async () => {
+  it('点击领取 10 单后调用批量领取接口并刷新我的任务和计数', async () => {
     let orderRequests = 0;
     (api.get as Mock).mockImplementation((url: string) => {
       if (url === '/worker/orders/mine?limit=50') {
@@ -213,17 +214,62 @@ describe('WorkerDashboard', () => {
       }
       return Promise.reject(new Error(`Unexpected GET ${url}`));
     });
-    (api.post as Mock).mockResolvedValue({ data: { order: workerOrder({ id: 'order-2' }) } });
+    (api.post as Mock).mockResolvedValue({ data: { orders: [workerOrder({ id: 'order-2' })], claimedCount: 1 } });
 
     const { container, root } = renderWorkerDashboard();
     mountedRoot = root;
     await flushAsyncWork();
 
-    await clickButton(findButton(container, '领取任务')!);
+    await clickButton(findButton(container, '领取 10 单')!);
     await flushAsyncWork();
 
-    expect(api.post).toHaveBeenCalledWith('/worker/orders/claim-next');
+    expect(api.post).toHaveBeenCalledWith('/worker/orders/claim-batch');
+    expect(toast.success).toHaveBeenCalledWith('已领取 1 单');
     expect(container.textContent).toContain('#1');
+  });
+
+  it('批量领取没有可领取订单时提示暂无任务', async () => {
+    mockDashboardLoad([]);
+    (api.post as Mock).mockResolvedValue({ data: { orders: [], claimedCount: 0 } });
+
+    const { container, root } = renderWorkerDashboard();
+    mountedRoot = root;
+    await flushAsyncWork();
+
+    await clickButton(findButton(container, '领取 10 单')!);
+    await flushAsyncWork();
+
+    expect(api.post).toHaveBeenCalledWith('/worker/orders/claim-batch');
+    expect(toast.error).toHaveBeenCalledWith('暂无可领取任务');
+  });
+
+  it('批量领取请求未完成时禁用按钮', async () => {
+    mockDashboardLoad([]);
+    let resolveClaimRequest: (value: { data: { orders: WorkerOrder[]; claimedCount: number } }) => void = () => undefined;
+    (api.post as Mock).mockReturnValue(new Promise((resolve) => {
+      resolveClaimRequest = resolve;
+    }));
+
+    const { container, root } = renderWorkerDashboard();
+    mountedRoot = root;
+    await flushAsyncWork();
+
+    const claimButton = findButton(container, '领取 10 单')!;
+    await act(async () => {
+      claimButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(claimButton.disabled).toBe(true);
+    expect(claimButton.textContent).toContain('领取中...');
+
+    await act(async () => {
+      resolveClaimRequest({ data: { orders: [], claimedCount: 0 } });
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
   });
 
   it('二维码和 Pix 付款码界面按相同序号展示，切换不会改变排序', async () => {

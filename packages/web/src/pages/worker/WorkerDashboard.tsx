@@ -128,12 +128,13 @@ export default function WorkerDashboard() {
     }
   };
 
-  const handleClaimNext = async () => {
+  const handleClaimBatch = async () => {
     setClaiming(true);
     try {
-      const res = await api.post('/worker/orders/claim-next');
-      if (res.data.order) {
-        toast.success('任务已领取');
+      const res = await api.post('/worker/orders/claim-batch');
+      const claimedCount = Number(res.data.claimedCount) || 0;
+      if (claimedCount > 0) {
+        toast.success(`已领取 ${claimedCount} 单`);
       } else {
         toast.error('暂无可领取任务');
       }
@@ -172,11 +173,11 @@ export default function WorkerDashboard() {
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
               <button
                 type="button"
-                onClick={handleClaimNext}
+                onClick={handleClaimBatch}
                 disabled={claiming}
                 className="rounded-lg bg-app-accent px-4 py-2 text-sm font-semibold text-white hover:bg-app-accentHover disabled:opacity-50"
               >
-                {claiming ? '领取中...' : '领取任务'}
+                {claiming ? '领取中...' : '领取 10 单'}
               </button>
               <div className="grid grid-cols-2 gap-2 rounded-xl bg-app-muted p-1">
                 <button
@@ -206,7 +207,7 @@ export default function WorkerDashboard() {
           </div>
         ) : orders.length === 0 ? (
           <div className="flex min-h-[60vh] items-center justify-center rounded-card border border-app-border bg-app-surface p-6 text-center text-app-secondary">
-            暂无已领取任务，点击“领取任务”获取下一单
+            暂无已领取任务，点击“领取 10 单”获取任务
           </div>
         ) : (
           <div className="grid w-full grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">

@@ -34,7 +34,7 @@ vi.mock('../ws/index.ts', () => ({
 }));
 
 const {
-  claimNextPaymentOrder,
+  claimPaymentOrderBatch,
   createOrder,
   completeOrder,
   completeClaimedPaymentOrder,
@@ -334,31 +334,88 @@ describe('order.service', () => {
     expect(broadcastOrderStatusChange).toHaveBeenCalledWith(completedOrder);
   });
 
-  it('claims the next available pending order for the current worker', async () => {
+  it('claims up to ten available pending orders for the current worker in stable queue order', async () => {
     const claimedAt = new Date('2026-06-01T00:00:00.000Z');
     vi.useFakeTimers();
     vi.setSystemTime(claimedAt);
-    prisma.$queryRaw.mockResolvedValue([{
-      id: 'order-1',
-      trackingToken: 'track-1',
-      status: 'PENDING_PAYMENT',
-      pixCode: 'pix-code',
-      pixQrPng: null,
-      pixExpiresAt: null,
-      pixImageUrl: null,
-      createdAt: claimedAt,
-      claimedById: 'worker-1',
-      claimedAt,
-      claimExpiresAt: new Date('2026-06-01T00:30:00.000Z'),
-    }]);
+    prisma.$queryRaw.mockResolvedValue(
+      Array.from({ length: 10 }, (_, index) => ({
+        id: `order-${index + 1}`,
+        trackingToken: `track-${index + 1}`,
+        status: 'PENDING_PAYMENT',
+        pixCode: `pix-code-${index + 1}`,
+        pixQrPng: null,
+        pixExpiresAt: null,
+        pixImageUrl: null,
+        createdAt: new Date(claimedAt.getTime() + index),
+        claimedById: 'worker-1',
+        claimedAt,
+        claimExpiresAt: new Date('2026-06-01T00:30:00.000Z'),
+      })),
+    );
 
-    await expect(claimNextPaymentOrder('worker-1')).resolves.toMatchObject({
-      id: 'order-1',
-      claimedById: 'worker-1',
-      claimExpiresAt: '2026-06-01T00:30:00.000Z',
-    });
+    const claimedBatch = await claimPaymentOrderBatch('worker-1');
+
+    expect(claimedBatch.claimedCount).toBe(10);
+    expect(claimedBatch.orders).toHaveLength(10);
+    expect(claimedBatch.orders.slice(0, 2)).toMatchObject([
+      { id: 'order-1', claimedById: 'worker-1', claimExpiresAt: '2026-06-01T00:30:00.000Z' },
+      { id: 'order-2', claimedById: 'worker-1', claimExpiresAt: '2026-06-01T00:30:00.000Z' },
+    ]);
 
     expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+    const rawSqlCall = prisma.$queryRaw.mock.calls[0];
+    expect(rawSqlCall).toContain(10);
+    expect(rawSqlCall.some((part) => String(part).includes('ORDER BY "created_at" ASC, "id" ASC'))).toBe(true);
+    expect(rawSqlCall.some((part) => String(part).includes('FOR UPDATE SKIP LOCKED'))).toBe(true);
+  });
+
+  it('claims every available pending order when fewer than ten are available', async () => {
+    const claimedAt = new Date('2026-06-01T00:00:00.000Z');
+    vi.useFakeTimers();
+    vi.setSystemTime(claimedAt);
+    prisma.$queryRaw.mockResolvedValue([
+      {
+        id: 'order-1',
+        trackingToken: 'track-1',
+        status: 'PENDING_PAYMENT',
+        pixCode: 'pix-code-1',
+        pixQrPng: null,
+        pixExpiresAt: null,
+        pixImageUrl: null,
+        createdAt: claimedAt,
+        claimedById: 'worker-1',
+        claimedAt,
+        claimExpiresAt: new Date('2026-06-01T00:30:00.000Z'),
+      },
+      {
+        id: 'order-2',
+        trackingToken: 'track-2',
+        status: 'PENDING_PAYMENT',
+        pixCode: 'pix-code-2',
+        pixQrPng: null,
+        pixExpiresAt: null,
+        pixImageUrl: null,
+        createdAt: new Date('2026-06-01T00:00:01.000Z'),
+        claimedById: 'worker-1',
+        claimedAt,
+        claimExpiresAt: new Date('2026-06-01T00:30:00.000Z'),
+      },
+    ]);
+
+    await expect(claimPaymentOrderBatch('worker-1')).resolves.toMatchObject({
+      claimedCount: 2,
+      orders: [{ id: 'order-1' }, { id: 'order-2' }],
+    });
+  });
+
+  it('returns an empty claimed batch when no pending orders are available', async () => {
+    prisma.$queryRaw.mockResolvedValue([]);
+
+    await expect(claimPaymentOrderBatch('worker-1')).resolves.toEqual({
+      orders: [],
+      claimedCount: 0,
+    });
   });
 
   it('returns the current worker claimed orders only', async () => {

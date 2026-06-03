@@ -29,6 +29,7 @@ const RECENT_COMPLETION_LOOKBACK_MS = 24 * 60 * 60 * 1000;
 const RECENT_COMPLETION_SAMPLE_LIMIT = 20;
 const MIN_RECENT_COMPLETION_SAMPLES = 3;
 const CLAIM_LOCK_MS = 30 * 60 * 1000;
+const WORKER_CLAIM_BATCH_SIZE = 10;
 const MAX_DIAGNOSTIC_DETAIL_LENGTH = 1000;
 
 export interface GenerationFailureDiagnostic {
@@ -388,10 +389,10 @@ function buildWorkerOrderRowView(order: WorkerOrderRow) {
   };
 }
 
-export async function claimNextPaymentOrder(workerId: string) {
+export async function claimPaymentOrderBatch(workerId: string) {
   const claimedAt = new Date();
   const claimExpiresAt = new Date(claimedAt.getTime() + CLAIM_LOCK_MS);
-  const [claimed] = await prisma.$queryRaw<WorkerOrderRow[]>`
+  const claimedOrders = await prisma.$queryRaw<WorkerOrderRow[]>`
     WITH candidate AS (
       SELECT "id"
       FROM "orders"
@@ -399,7 +400,7 @@ export async function claimNextPaymentOrder(workerId: string) {
         AND ("claimed_by_id" IS NULL OR "claim_expires_at" < NOW())
       ORDER BY "created_at" ASC, "id" ASC
       FOR UPDATE SKIP LOCKED
-      LIMIT 1
+      LIMIT ${WORKER_CLAIM_BATCH_SIZE}
     ),
     claimed AS (
       UPDATE "orders"
@@ -408,7 +409,8 @@ export async function claimNextPaymentOrder(workerId: string) {
         "claimed_at" = ${claimedAt},
         "claim_expires_at" = ${claimExpiresAt},
         "updated_at" = NOW()
-      WHERE "id" IN (SELECT "id" FROM candidate)
+      FROM candidate
+      WHERE "orders"."id" = candidate."id"
       RETURNING
         "id",
         "tracking_token" AS "trackingToken",
@@ -422,10 +424,26 @@ export async function claimNextPaymentOrder(workerId: string) {
         "claimed_at" AS "claimedAt",
         "claim_expires_at" AS "claimExpiresAt"
     )
-    SELECT * FROM claimed
+    SELECT
+      "id",
+      "trackingToken",
+      "status",
+      "pixCode",
+      "pixQrPng",
+      "pixExpiresAt",
+      "pixImageUrl",
+      "createdAt",
+      "claimedById",
+      "claimedAt",
+      "claimExpiresAt"
+    FROM claimed
+    ORDER BY "createdAt" ASC, "id" ASC
   `;
 
-  return claimed ? buildWorkerOrderRowView(claimed) : null;
+  return {
+    orders: claimedOrders.map(buildWorkerOrderRowView),
+    claimedCount: claimedOrders.length,
+  };
 }
 
 export async function getWorkerClaimedOrders(workerId: string, page: number, limit: number) {
