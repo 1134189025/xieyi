@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { authenticate, authorize } from '../middleware/auth.ts';
 import {
-  claimNextPaymentOrder,
+  claimPaymentOrderBatch,
   completeClaimedPaymentOrder,
   getWorkerClaimedOrders,
   getWorkerOrders,
@@ -56,10 +56,10 @@ router.get('/summary', async (req, res, next) => {
   }
 });
 
-router.post('/orders/claim-next', async (req, res, next) => {
+router.post('/orders/claim-batch', async (req, res, next) => {
   try {
-    const order = await claimNextPaymentOrder(req.user!.sub);
-    res.json({ order });
+    const claimedBatch = await claimPaymentOrderBatch(req.user!.sub);
+    res.json(claimedBatch);
   } catch (error) {
     next(error);
   }

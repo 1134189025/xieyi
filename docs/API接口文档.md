@@ -342,9 +342,59 @@ curl http://localhost:3000/api/worker/summary \
 {
   "completedTotal": 100,
   "completedToday": 10,
-  "completedThisWeek": 50
+  "completedThisWeek": 50,
+  "claimedCount": 2,
+  "availableCount": 8
 }
 ```
+
+字段说明：
+
+| 字段 | 说明 |
+| --- | --- |
+| `completedTotal` | 当前 Worker 历史完成总数 |
+| `completedToday` | 当前 Worker 上海自然日内完成数 |
+| `completedThisWeek` | 当前 Worker 上海自然周内完成数 |
+| `claimedCount` | 当前 Worker 有效领取中的待支付订单数 |
+| `availableCount` | 当前可领取的待支付订单数，不包含其他 Worker 有效领取中的订单 |
+
+### POST `/api/worker/orders/claim-batch`
+
+固定批量领取待支付订单。每次最多领取 10 单；可领取订单不足 10 单时，领取当前全部可领取订单。
+
+权限：`WORKER`、`ADMIN`。
+
+请求示例：
+
+```bash
+curl -X POST http://localhost:3000/api/worker/orders/claim-batch \
+  -H "Authorization: Bearer <token>"
+```
+
+成功响应：
+
+```json
+{
+  "orders": [
+    {
+      "id": "order-id",
+      "trackingToken": "tracking-token",
+      "status": "PENDING_PAYMENT",
+      "pixCode": "000201...",
+      "pixQrPngBase64": "base64-png",
+      "pixExpiresAt": "2026-06-02T00:30:00.000Z",
+      "pixImageUrl": "https://example.com/pix.png",
+      "claimedById": "worker-id",
+      "claimedAt": "2026-06-02T00:00:00.000Z",
+      "claimExpiresAt": "2026-06-02T00:30:00.000Z",
+      "createdAt": "2026-06-02T00:00:00.000Z"
+    }
+  ],
+  "claimedCount": 1
+}
+```
+
+说明：返回 `claimedCount=0` 表示当前没有可领取订单。批量领取只处理 `PENDING_PAYMENT` 且未被有效领取或领取已过期的订单。
 
 ### POST `/api/worker/orders/:orderId/complete`
 
