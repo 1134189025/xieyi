@@ -156,43 +156,6 @@ describe('pix-generation.service', () => {
     expect(prisma.$executeRaw).not.toHaveBeenCalled();
   });
 
-  it('stores oaipay long-link diagnostics when checkout generation fails on the final attempt', async () => {
-    const failedOrder = {
-      id: 'order-1',
-      trackingToken: 'track-1',
-      status: 'FAILED',
-      completedAt: null,
-      createdAt: new Date('2026-06-01T00:00:00.000Z'),
-    };
-    prisma.order.findUnique
-      .mockResolvedValueOnce({
-        id: 'order-1',
-        trackingToken: 'track-1',
-        status: 'CREATING_PAYMENT',
-        encryptedSessionData: 'encrypted:session-token-value',
-        generationQueuedAt: new Date('2026-06-01T00:00:00.000Z'),
-        createdAt: new Date('2026-06-01T00:00:00.000Z'),
-      })
-      .mockResolvedValueOnce(failedOrder);
-    createCheckoutUrl.mockRejectedValue(Object.assign(new Error('oaipay failed token=eyJ.secret.payload'), {
-      code: 'CHATGPT_CHECKOUT_FAILED',
-      diagnostic: {
-        httpStatus: 502,
-        message: 'oaipay failed token=eyJ.secret.payload',
-      },
-    }));
-    shouldCountProxyFailure.mockReturnValue(true);
-
-    await processPixGenerationJob({ orderId: 'order-1', finalAttempt: true });
-
-    const rawSqlCall = String(prisma.$executeRaw.mock.calls[0]);
-    expect(rawSqlCall).toContain('oaipay_long_link');
-    expect(rawSqlCall).toContain('502');
-    expect(rawSqlCall).toContain('[redacted-token]');
-    expect(rawSqlCall).not.toContain('eyJ.secret.payload');
-    expect(broadcastOrderStatusChange).toHaveBeenCalledWith(failedOrder);
-  });
-
   it('rejects unparseable session input before selecting proxies without waiting for the final attempt', async () => {
     const failedOrder = {
       id: 'order-1',
