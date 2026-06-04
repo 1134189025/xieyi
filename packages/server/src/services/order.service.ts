@@ -412,17 +412,17 @@ export async function claimPaymentOrderBatch(workerId: string) {
       FROM candidate
       WHERE "orders"."id" = candidate."id"
       RETURNING
-        "id",
-        "tracking_token" AS "trackingToken",
-        "status"::text AS "status",
-        "pix_code" AS "pixCode",
-        "pix_qr_png" AS "pixQrPng",
-        "pix_expires_at" AS "pixExpiresAt",
-        "pix_image_url" AS "pixImageUrl",
-        "created_at" AS "createdAt",
-        "claimed_by_id" AS "claimedById",
-        "claimed_at" AS "claimedAt",
-        "claim_expires_at" AS "claimExpiresAt"
+        "orders"."id" AS "id",
+        "orders"."tracking_token" AS "trackingToken",
+        "orders"."status"::text AS "status",
+        "orders"."pix_code" AS "pixCode",
+        "orders"."pix_qr_png" AS "pixQrPng",
+        "orders"."pix_expires_at" AS "pixExpiresAt",
+        "orders"."pix_image_url" AS "pixImageUrl",
+        "orders"."created_at" AS "createdAt",
+        "orders"."claimed_by_id" AS "claimedById",
+        "orders"."claimed_at" AS "claimedAt",
+        "orders"."claim_expires_at" AS "claimExpiresAt"
     )
     SELECT
       "id",

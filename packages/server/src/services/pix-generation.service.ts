@@ -11,7 +11,7 @@ import {
 import { decrypt, encrypt } from '../utils/crypto.ts';
 import { prisma } from '../db.ts';
 import { broadcastOrderReady } from '../ws/index.ts';
-import { failCreatingPaymentOrder, type GenerationFailureDiagnostic } from './order.service.ts';
+import { failCreatingPaymentOrder } from './order.service.ts';
 
 const SAFE_PAYMENT_ERROR_CODE = 'PAYMENT_FAILED';
 const TERMINAL_GENERATION_ERROR_CODES = new Set([
@@ -40,7 +40,6 @@ export async function processPixGenerationJob(input: ProcessPixGenerationJobInpu
 
   let failedPoolName: ProxyPoolName | null = null;
   let failedProxy: SelectedProxy | null = null;
-  let failedStage: string | null = null;
   let chatGptProxy: SelectedProxy | null = null;
   let stripeProxy: SelectedProxy | null = null;
 
@@ -61,13 +60,11 @@ export async function processPixGenerationJob(input: ProcessPixGenerationJobInpu
 
     failedPoolName = 'chatgpt';
     failedProxy = chatGptProxy;
-    failedStage = 'oaipay_long_link';
     const checkoutUrl = await createCheckoutUrl(credential.accessToken, chatGptRequestOptions);
     await recordProxySuccess('chatgpt', chatGptProxy?.id ?? null);
 
     failedPoolName = 'stripe';
     failedProxy = stripeProxy;
-    failedStage = 'stripe_pix';
     const { stripeResult, profile, qrPngBuffer } = await generatePixPayment(checkoutUrl, stripeRequestOptions);
     await recordProxySuccess('stripe', stripeProxy?.id ?? null);
 
@@ -111,7 +108,7 @@ export async function processPixGenerationJob(input: ProcessPixGenerationJobInpu
       throw error;
     }
 
-    await failCreatingPaymentOrder(input.orderId, errorCode, generationFailureDiagnostic(error, failedStage));
+    await failCreatingPaymentOrder(input.orderId, errorCode);
   }
 }
 
@@ -122,28 +119,4 @@ function publicGenerationErrorCode(error: unknown): string {
 
 function isTerminalGenerationError(errorCode: string): boolean {
   return TERMINAL_GENERATION_ERROR_CODES.has(errorCode);
-}
-
-function generationFailureDiagnostic(
-  error: unknown,
-  stage: string | null,
-): GenerationFailureDiagnostic {
-  const upstreamDiagnostic = (error as {
-    diagnostic?: { httpStatus?: unknown; message?: unknown };
-  }).diagnostic;
-  const statusCode = (error as { statusCode?: unknown }).statusCode;
-
-  return {
-    stage,
-    detail: typeof upstreamDiagnostic?.message === 'string'
-      ? upstreamDiagnostic.message
-      : error instanceof Error
-        ? error.message
-        : null,
-    httpStatus: typeof upstreamDiagnostic?.httpStatus === 'number'
-      ? upstreamDiagnostic.httpStatus
-      : typeof statusCode === 'number'
-        ? statusCode
-        : null,
-  };
 }

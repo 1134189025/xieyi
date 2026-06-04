@@ -368,6 +368,7 @@ describe('order.service', () => {
     expect(rawSqlCall).toContain(10);
     expect(rawSqlCall.some((part) => String(part).includes('ORDER BY "created_at" ASC, "id" ASC'))).toBe(true);
     expect(rawSqlCall.some((part) => String(part).includes('FOR UPDATE SKIP LOCKED'))).toBe(true);
+    expect(rawSqlCall.some((part) => String(part).includes('"orders"."id" AS "id"'))).toBe(true);
   });
 
   it('claims every available pending order when fewer than ten are available', async () => {
