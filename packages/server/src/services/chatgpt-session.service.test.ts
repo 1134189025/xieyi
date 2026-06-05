@@ -7,8 +7,17 @@ import {
   parseChatGptSessionInput,
 } from './chatgpt-session.service.ts';
 
-const ACCESS_TOKEN = 'eyJhbGciOiJSUzI1NiJ9.eyJhdWQiOiJodHRwcyJ9.signature';
+const ACCESS_TOKEN = buildAccessToken({ aud: 'https' });
+const EMAIL_ACCESS_TOKEN = buildAccessToken({ email: 'jwt-customer@example.com' });
 const SESSION_TOKEN = 'eyJhbGciOiJkaXIifQ..iv.ciphertext.tag';
+
+function buildAccessToken(claims: Record<string, unknown>): string {
+  return [
+    Buffer.from(JSON.stringify({ alg: 'RS256' })).toString('base64url'),
+    Buffer.from(JSON.stringify(claims)).toString('base64url'),
+    'signature',
+  ].join('.');
+}
 
 describe('chatgpt-session.service', () => {
   afterEach(() => {
@@ -22,6 +31,9 @@ describe('chatgpt-session.service', () => {
     expect(parseChatGptSessionInput(ACCESS_TOKEN)).toEqual({
       kind: 'access_token',
       accessToken: ACCESS_TOKEN,
+      sessionToken: null,
+      deviceId: null,
+      email: null,
     });
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -38,13 +50,38 @@ describe('chatgpt-session.service', () => {
       user: { email: 'customer@example.com' },
       [fieldName]: ACCESS_TOKEN,
       sessionToken: SESSION_TOKEN,
+      deviceId: 'device-123',
+      email: 'top-level@example.com',
     });
 
     expect(parseChatGptSessionInput(input)).toEqual({
       kind: 'access_token',
       accessToken: ACCESS_TOKEN,
+      sessionToken: SESSION_TOKEN,
+      deviceId: 'device-123',
+      email: 'top-level@example.com',
     });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('从 accessToken JWT claims 提取 email 作为账单邮箱兜底', () => {
+    expect(parseChatGptSessionInput(EMAIL_ACCESS_TOKEN)).toEqual({
+      kind: 'access_token',
+      accessToken: EMAIL_ACCESS_TOKEN,
+      sessionToken: null,
+      deviceId: null,
+      email: 'jwt-customer@example.com',
+    });
+  });
+
+  it('支持 accessToken----sessionToken 组合输入并保留 sessionToken', () => {
+    expect(parseChatGptSessionInput(`${EMAIL_ACCESS_TOKEN}----${SESSION_TOKEN}`)).toEqual({
+      kind: 'access_token',
+      accessToken: EMAIL_ACCESS_TOKEN,
+      sessionToken: SESSION_TOKEN,
+      deviceId: null,
+      email: 'jwt-customer@example.com',
+    });
   });
 
   it('只有 sessionToken 的 JSON 返回稳定错误码且不请求 ChatGPT session 页面', () => {

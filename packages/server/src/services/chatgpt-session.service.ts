@@ -33,7 +33,13 @@ export interface UpstreamRequestOptions {
 }
 
 export type ChatGptSessionCredential =
-  { kind: 'access_token'; accessToken: string };
+  {
+    kind: 'access_token';
+    accessToken: string;
+    sessionToken: string | null;
+    deviceId: string | null;
+    email: string | null;
+  };
 
 export interface ChatGptCheckoutSession {
   checkoutSessionId: string;
@@ -57,8 +63,11 @@ export function parseChatGptSessionInput(input: string): ChatGptSessionCredentia
   const jsonCredential = parseJsonSessionCredential(sessionInput);
   if (jsonCredential) return jsonCredential;
 
+  const combinedCredential = parseCombinedSessionCredential(sessionInput);
+  if (combinedCredential) return combinedCredential;
+
   if (isCompactJwt(sessionInput)) {
-    return { kind: 'access_token', accessToken: sessionInput };
+    return buildCredential(sessionInput);
   }
 
   throw unrecognizedSessionError();
@@ -80,12 +89,54 @@ function parseJsonSessionCredential(input: string): ChatGptSessionCredential | n
     const accessToken = readNonEmptyString(parsed[fieldName]);
     if (!accessToken) continue;
     if (isCompactJwt(accessToken)) {
-      return { kind: 'access_token', accessToken };
+      return buildCredential(accessToken, {
+        sessionToken: firstNonEmptyString(parsed.sessionToken, parsed.session_token),
+        deviceId: firstNonEmptyString(parsed.deviceId, parsed.device_id, parsed.oaiDid, parsed.oai_did),
+        email: firstNonEmptyString(parsed.email, asRecord(parsed.user).email),
+      });
     }
     throw unrecognizedSessionError();
   }
 
   throw unrecognizedSessionError();
+}
+
+function parseCombinedSessionCredential(input: string): ChatGptSessionCredential | null {
+  const separatorIndex = input.indexOf('----');
+  if (separatorIndex <= 0) return null;
+
+  const accessToken = input.slice(0, separatorIndex).trim();
+  const sessionToken = input.slice(separatorIndex + 4).trim();
+  if (!isCompactJwt(accessToken) || !sessionToken) throw unrecognizedSessionError();
+  return buildCredential(accessToken, { sessionToken });
+}
+
+function buildCredential(
+  accessToken: string,
+  fields: Partial<Omit<ChatGptSessionCredential, 'kind' | 'accessToken'>> = {},
+): ChatGptSessionCredential {
+  return {
+    kind: 'access_token',
+    accessToken,
+    sessionToken: fields.sessionToken ?? null,
+    deviceId: fields.deviceId ?? null,
+    email: fields.email ?? emailFromJwt(accessToken),
+  };
+}
+
+function emailFromJwt(token: string): string | null {
+  const payload = token.split('.')[1];
+  if (!payload) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as unknown;
+    if (!isRecord(parsed)) return null;
+    const directEmail = readNonEmptyString(parsed.email);
+    if (directEmail) return directEmail;
+    const profile = asRecord(parsed['https://api.openai.com/profile']);
+    return readNonEmptyString(profile.email);
+  } catch {
+    return null;
+  }
 }
 
 function isCompactJwt(value: string): boolean {
@@ -95,6 +146,10 @@ function isCompactJwt(value: string): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {};
 }
 
 function readNonEmptyString(value: unknown): string | null {
