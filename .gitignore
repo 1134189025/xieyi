@@ -17,6 +17,8 @@ Thumbs.db
 # Output directories (generated artifacts)
 output/
 output-*/
+tmp/
+graphify-out/
 
 # Logs
 *.log

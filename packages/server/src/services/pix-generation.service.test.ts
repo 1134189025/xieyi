@@ -10,7 +10,6 @@ const prisma = {
 
 const decrypt = vi.fn((ciphertext: string) => ciphertext.replace(/^encrypted:/, ''));
 const parseChatGptSessionInput = vi.fn();
-const createCheckoutUrl = vi.fn();
 const generatePixPayment = vi.fn();
 const selectHealthyProxy = vi.fn();
 const recordProxySuccess = vi.fn();
@@ -23,7 +22,6 @@ vi.mock('../db.ts', () => ({ prisma }));
 vi.mock('../utils/crypto.ts', () => ({ decrypt, encrypt: vi.fn((value: string) => `encrypted:${value}`) }));
 vi.mock('./chatgpt-session.service.ts', () => ({
   parseChatGptSessionInput,
-  createCheckoutUrl,
 }));
 vi.mock('./pix-payment.service.ts', () => ({ generatePixPayment }));
 vi.mock('./settings.service.ts', () => ({
@@ -51,7 +49,6 @@ describe('pix-generation.service', () => {
         proxyUrl: 'http://stripe:user@stripe-proxy.example:10001',
         maskedProxy: 'http://stripe:****@stripe-proxy.example:10001',
       });
-    createCheckoutUrl.mockResolvedValue('https://pay.openai.com/c/pay/cs_test_123');
     generatePixPayment.mockResolvedValue({
       stripeResult: {
         checkoutSessionId: 'cs_test_123',
@@ -93,13 +90,12 @@ describe('pix-generation.service', () => {
     await processPixGenerationJob({ orderId: 'order-1', finalAttempt: false });
 
     expect(parseChatGptSessionInput).toHaveBeenCalledWith('session-token-value');
-    expect(createCheckoutUrl).toHaveBeenCalledWith(
-      'access-token-value',
-      expect.objectContaining({ proxyUrl: 'http://chat:user@chat-proxy.example:10000' }),
-    );
     expect(generatePixPayment).toHaveBeenCalledWith(
-      'https://pay.openai.com/c/pay/cs_test_123',
-      expect.objectContaining({ proxyUrl: 'http://stripe:user@stripe-proxy.example:10001' }),
+      'access-token-value',
+      expect.objectContaining({
+        chatGpt: expect.objectContaining({ proxyUrl: 'http://chat:user@chat-proxy.example:10000' }),
+        stripe: expect.objectContaining({ proxyUrl: 'http://stripe:user@stripe-proxy.example:10001' }),
+      }),
     );
     expect(prisma.order.updateMany).toHaveBeenLastCalledWith({
       where: { id: 'order-1', status: 'CREATING_PAYMENT' },
@@ -128,7 +124,7 @@ describe('pix-generation.service', () => {
       createdAt: new Date('2026-06-01T00:00:00.000Z'),
     });
     const timeout = Object.assign(new Error('timeout'), { code: 'UPSTREAM_TIMEOUT' });
-    createCheckoutUrl.mockRejectedValue(timeout);
+    generatePixPayment.mockRejectedValue(Object.assign(timeout, { proxyPoolName: 'chatgpt' }));
     shouldCountProxyFailure.mockReturnValue(true);
 
     await expect(processPixGenerationJob({ orderId: 'order-1', finalAttempt: false })).rejects.toBe(timeout);
@@ -147,7 +143,7 @@ describe('pix-generation.service', () => {
       createdAt: new Date('2026-06-01T00:00:00.000Z'),
     });
     const checkoutFailure = Object.assign(new Error('checkout failed'), { code: 'CHATGPT_CHECKOUT_FAILED' });
-    createCheckoutUrl.mockRejectedValue(checkoutFailure);
+    generatePixPayment.mockRejectedValue(Object.assign(checkoutFailure, { proxyPoolName: 'chatgpt' }));
     shouldCountProxyFailure.mockReturnValue(true);
 
     await expect(processPixGenerationJob({ orderId: 'order-1', finalAttempt: false })).rejects.toBe(checkoutFailure);
@@ -181,7 +177,6 @@ describe('pix-generation.service', () => {
     await processPixGenerationJob({ orderId: 'order-1', finalAttempt: false });
 
     expect(selectHealthyProxy).not.toHaveBeenCalled();
-    expect(createCheckoutUrl).not.toHaveBeenCalled();
     expect(generatePixPayment).not.toHaveBeenCalled();
     expect(recordProxyFailure).not.toHaveBeenCalled();
     expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);

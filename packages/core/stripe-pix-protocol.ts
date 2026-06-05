@@ -66,22 +66,13 @@ export interface PixQrArtifact {
   setupIntentStatus?: string;
 }
 
-export interface CreateStripePixPaymentInput extends StripeAttributionMetadata {
-  checkoutUrl: string;
-  identifiers?: StripeRuntimeIdentifiers;
-  profile: BrazilBillingProfile;
-  riskFields: StripeRiskFields;
-  timeoutMs?: number;
-  proxyUrl?: string;
-  retry?: StripeRetryOptions;
-  transport?: StripeHttpTransport;
-}
-
 export interface CreateDirectStripePixPaymentInput {
+  checkoutSessionId?: string;
   checkoutUrl: string;
   profile: BrazilBillingProfile;
   identifiers?: StripeRuntimeIdentifiers;
   clientSessionId?: string;
+  checkoutConfigId?: string;
   riskFields?: Partial<StripeRiskFields>;
   timeoutMs?: number;
   proxyUrl?: string;
@@ -89,11 +80,31 @@ export interface CreateDirectStripePixPaymentInput {
   transport?: StripeHttpTransport;
 }
 
+export interface SubmitStripePixPaymentResult {
+  checkoutSessionId: string;
+  paymentMethodId: string;
+  pix: PixQrArtifact | null;
+  amount: number;
+  currency?: string;
+  checkoutConfigId?: string;
+}
+
 export interface CreateStripePixPaymentResult {
   checkoutSessionId: string;
   paymentMethodId: string;
   pix: PixQrArtifact;
   checkoutConfigId?: string;
+}
+
+export interface PollStripePaymentPageForPixQrInput {
+  checkoutSessionId: string;
+  paymentMethodId: string;
+  attempts?: number;
+  waitMs?: number;
+  timeoutMs?: number;
+  proxyUrl?: string;
+  retry?: StripeRetryOptions;
+  transport?: StripeHttpTransport;
 }
 
 export interface RetrieveStripeSetupIntentStatusInput {
@@ -112,6 +123,7 @@ export interface StripeSetupIntentStatusResult {
 
 export interface StripeHttpTransport {
   postForm(url: string, body: URLSearchParams, options?: { timeoutMs?: number }): Promise<unknown>;
+  getJson?(url: string, options?: { timeoutMs?: number }): Promise<unknown>;
 }
 
 export interface StripeRetryOptions {
@@ -156,6 +168,34 @@ export function buildPaymentPageRequestBody(input: BuildPaymentPageRequestBodyIn
   body.set('tax_region[line1]', input.profile.address.line1);
   body.set('tax_region[city]', input.profile.address.city);
   body.set('key', input.stripePublishableKey ?? DEFAULT_STRIPE_PUBLISHABLE_KEY);
+  return body;
+}
+
+export function buildPaymentPageInitRequestBody(stripePublishableKey = DEFAULT_STRIPE_PUBLISHABLE_KEY): URLSearchParams {
+  const body = new URLSearchParams();
+  body.set('browser_locale', 'pt-BR');
+  body.set('browser_timezone', 'America/Sao_Paulo');
+  body.set('elements_session_client[client_betas][0]', 'custom_checkout_server_updates_1');
+  body.set('elements_session_client[client_betas][1]', 'custom_checkout_manual_approval_1');
+  body.set('elements_session_client[elements_init_source]', 'custom_checkout');
+  body.set('elements_session_client[referrer_host]', 'chatgpt.com');
+  body.set('elements_session_client[stripe_js_id]', randomUUID());
+  body.set('elements_session_client[locale]', 'pt-BR');
+  body.set('elements_session_client[is_aggregation_expected]', 'false');
+  body.set('key', stripePublishableKey);
+  return body;
+}
+
+export function buildPaymentPagePollRequestBody(stripePublishableKey = DEFAULT_STRIPE_PUBLISHABLE_KEY): URLSearchParams {
+  const body = new URLSearchParams();
+  body.set('elements_session_client[client_betas][0]', 'custom_checkout_server_updates_1');
+  body.set('elements_session_client[client_betas][1]', 'custom_checkout_manual_approval_1');
+  body.set('elements_session_client[elements_init_source]', 'custom_checkout');
+  body.set('elements_session_client[referrer_host]', 'chatgpt.com');
+  body.set('elements_session_client[stripe_js_id]', randomUUID());
+  body.set('elements_session_client[locale]', 'pt-BR');
+  body.set('elements_session_client[is_aggregation_expected]', 'false');
+  body.set('key', stripePublishableKey);
   return body;
 }
 
@@ -226,65 +266,59 @@ export function extractPixQrArtifact(response: unknown): PixQrArtifact {
   };
 }
 
-export async function createStripePixPayment(input: CreateStripePixPaymentInput): Promise<CreateStripePixPaymentResult> {
-  const checkoutSessionId = parseCheckoutSessionId(input.checkoutUrl);
-  const identifiers = input.identifiers ?? createStripeRuntimeIdentifiers();
-  const transport = input.transport ?? new FetchStripeHttpTransport({ proxyUrl: input.proxyUrl, retry: input.retry });
-
-  const paymentMethodBody = buildPaymentMethodRequestBody({
-    checkoutSessionId,
-    clientSessionId: input.clientSessionId,
-    checkoutConfigId: input.checkoutConfigId,
-    identifiers,
-    profile: input.profile,
-  });
-  const requestOptions = { timeoutMs: input.timeoutMs ?? 30_000 };
-  const paymentMethodResponse = await transport.postForm('https://api.stripe.com/v1/payment_methods', paymentMethodBody, requestOptions);
-  const paymentMethodId = extractPaymentMethodId(paymentMethodResponse);
-
-  const confirmBody = buildConfirmRequestBody({
-    checkoutSessionId,
-    paymentMethodId,
-    returnUrl: input.checkoutUrl,
-    clientSessionId: input.clientSessionId,
-    checkoutConfigId: input.checkoutConfigId,
-    identifiers,
-    riskFields: input.riskFields,
-    expectedAmount: 0,
-  });
-  const confirmResponse = await transport.postForm(
-    `https://api.stripe.com/v1/payment_pages/${checkoutSessionId}/confirm`,
-    confirmBody,
-    requestOptions,
-  );
-
-  return {
-    checkoutSessionId,
-    paymentMethodId,
-    pix: extractPixQrArtifact(confirmResponse),
-    checkoutConfigId: input.checkoutConfigId,
-  };
+function tryExtractPixQrArtifact(response: unknown): PixQrArtifact | null {
+  try {
+    return extractPixQrArtifact(response);
+  } catch {
+    return null;
+  }
 }
 
 export async function createDirectStripePixPayment(
   input: CreateDirectStripePixPaymentInput,
 ): Promise<CreateStripePixPaymentResult> {
-  const checkoutSessionId = parseCheckoutSessionId(input.checkoutUrl);
+  const submission = await submitStripePixPayment(input);
+  const pix = submission.pix ?? await pollStripePaymentPageForPixQr({
+    checkoutSessionId: submission.checkoutSessionId,
+    paymentMethodId: submission.paymentMethodId,
+    timeoutMs: input.timeoutMs,
+    proxyUrl: input.proxyUrl,
+    retry: input.retry,
+    transport: input.transport,
+  });
+
+  return {
+    checkoutSessionId: submission.checkoutSessionId,
+    checkoutConfigId: submission.checkoutConfigId,
+    paymentMethodId: submission.paymentMethodId,
+    pix,
+  };
+}
+
+export async function submitStripePixPayment(
+  input: CreateDirectStripePixPaymentInput,
+): Promise<SubmitStripePixPaymentResult> {
+  const checkoutSessionId = resolveCheckoutSessionId(input);
   const identifiers = input.identifiers ?? createStripeRuntimeIdentifiers();
   const clientSessionId = input.clientSessionId ?? randomUUID();
   const transport = input.transport ?? new FetchStripeHttpTransport({ proxyUrl: input.proxyUrl, retry: input.retry });
   const requestOptions = { timeoutMs: input.timeoutMs ?? 30_000 };
 
-  const paymentPageResponse = await transport.postForm(
-    `https://api.stripe.com/v1/payment_pages/${checkoutSessionId}`,
-    buildPaymentPageRequestBody({ profile: input.profile }),
+  const paymentPageInitResponse = await transport.postForm(
+    `https://api.stripe.com/v1/payment_pages/${checkoutSessionId}/init`,
+    buildPaymentPageInitRequestBody(),
     requestOptions,
   );
-  const checkoutConfigId = optionalString(asRecord(paymentPageResponse).config_id);
-  const initChecksum = optionalString(asRecord(paymentPageResponse).init_checksum);
-  const payableAmount = extractPaymentPagePayableAmount(paymentPageResponse);
+  const initRecord = asRecord(paymentPageInitResponse);
+  const checkoutConfigId = input.checkoutConfigId ?? optionalString(initRecord.config_id);
+  const initChecksum = optionalString(initRecord.init_checksum);
+  const payableAmount = extractPaymentPagePayableAmount(paymentPageInitResponse);
+  const currency = optionalString(initRecord.currency);
   if (payableAmount > 0) {
     throw new StripePixProtocolError(400, '账号无资格，无法生成 Pix 支付', 'ACCOUNT_NOT_ELIGIBLE');
+  }
+  if (payableAmount !== 0) {
+    throw new StripePixProtocolError(502, '支付创建失败，请稍后重试', 'PAYMENT_FAILED');
   }
 
   const paymentMethodResponse = await transport.postForm(
@@ -319,8 +353,35 @@ export async function createDirectStripePixPayment(
     checkoutSessionId,
     checkoutConfigId,
     paymentMethodId,
-    pix: extractPixQrArtifact(confirmResponse),
+    amount: payableAmount,
+    currency,
+    pix: tryExtractPixQrArtifact(confirmResponse),
   };
+}
+
+export async function pollStripePaymentPageForPixQr(
+  input: PollStripePaymentPageForPixQrInput,
+): Promise<PixQrArtifact> {
+  const transport = input.transport ?? new FetchStripeHttpTransport({ proxyUrl: input.proxyUrl, retry: input.retry });
+  const attempts = input.attempts ?? 60;
+  const waitMs = input.waitMs ?? 1000;
+  const requestOptions = { timeoutMs: input.timeoutMs ?? 30_000 };
+  const paymentPageUrl = `https://api.stripe.com/v1/payment_pages/${input.checkoutSessionId}`;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    if (attempt > 1 && waitMs > 0) await delay(waitMs);
+    const params = buildPaymentPagePollRequestBody();
+    const response = transport.getJson
+      ? await transport.getJson(`${paymentPageUrl}?${params}`, requestOptions)
+      : await transport.postForm(paymentPageUrl, params, requestOptions);
+    const pix = tryExtractPixQrArtifact(response);
+    if (pix) return {
+      ...pix,
+      setupIntentId: pix.setupIntentId,
+    };
+  }
+
+  throw new StripePixProtocolError(502, '支付创建失败，请稍后重试', 'PAYMENT_FAILED');
 }
 
 export function urlSearchParamsToObject(params: URLSearchParams): Record<string, string> {
@@ -410,8 +471,13 @@ function extractPaymentPagePayableAmount(response: unknown): number {
   const totalSummary = asRecord(root.total_summary);
 
   const amount =
+    optionalNumber(root.amount_due) ??
+    optionalNumber(root.amount_total) ??
+    optionalNumber(root.total_amount_due) ??
+    optionalNumber(root.total) ??
     optionalNumber(invoice.amount_due) ??
     optionalNumber(invoice.total) ??
+    optionalNumber(totalSummary.due) ??
     optionalNumber(totalSummary.total);
 
   if (amount === undefined || !Number.isFinite(amount)) {
@@ -419,6 +485,14 @@ function extractPaymentPagePayableAmount(response: unknown): number {
   }
 
   return amount;
+}
+
+function resolveCheckoutSessionId(input: Pick<CreateDirectStripePixPaymentInput, 'checkoutSessionId' | 'checkoutUrl'>): string {
+  if (input.checkoutSessionId !== undefined) {
+    if (input.checkoutSessionId.startsWith('cs_')) return input.checkoutSessionId;
+    throw new Error('Invalid checkout session id');
+  }
+  return parseCheckoutSessionId(input.checkoutUrl);
 }
 
 function completeRiskFields(riskFields: Partial<StripeRiskFields> | undefined, initChecksum: string | undefined): StripeRiskFields {
@@ -474,6 +548,29 @@ class FetchStripeHttpTransport implements StripeHttpTransport {
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36',
         },
         body,
+      },
+      options.timeoutMs ?? 30_000,
+    );
+
+    const text = await response.text();
+    if (!response.ok) {
+      throw stripeResponseError(response.status, text);
+    }
+
+    return JSON.parse(text) as unknown;
+  }
+
+  async getJson(url: string, options: { timeoutMs?: number } = {}): Promise<unknown> {
+    const response = await this.fetchWithRetry(
+      url,
+      {
+        method: 'GET',
+        headers: {
+          accept: 'application/json',
+          'accept-language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+          'user-agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36',
+        },
       },
       options.timeoutMs ?? 30_000,
     );
@@ -585,7 +682,7 @@ function stripeResponseError(status: number, text: string): Error {
     return new StripePixProtocolError(400, '账号无资格，无法生成 Pix 支付', 'ACCOUNT_NOT_ELIGIBLE');
   }
 
-  return new Error(`Stripe request failed: ${status} ${text.slice(0, 500)}`);
+  return new StripePixProtocolError(status >= 500 ? 502 : status, '支付创建失败，请稍后重试', 'PAYMENT_FAILED');
 }
 
 function readStripeErrorCode(text: string): string | null {

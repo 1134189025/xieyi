@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AppError } from '../middleware/error-handler.ts';
 import {
-  createCheckoutUrl,
+  approveCheckoutSession,
+  createCheckoutSession,
   isAccessToken,
   parseChatGptSessionInput,
 } from './chatgpt-session.service.ts';
@@ -88,14 +89,58 @@ describe('chatgpt-session.service', () => {
     }
   });
 
-  it('ChatGPT checkout 响应缺少 URL 时返回稳定错误码', async () => {
+  it('创建巴西 BRL 0 元 checkout 并返回 session id、URL 和 processor', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ id: 'checkout_without_url' }),
+      json: async () => ({
+        checkout_session_id: 'cs_test_123',
+        url: 'https://pay.openai.com/c/pay/cs_test_123#fragment',
+        processor_entity: 'openai_llc',
+      }),
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(createCheckoutUrl(ACCESS_TOKEN)).rejects.toMatchObject({
+    await expect(createCheckoutSession(ACCESS_TOKEN)).resolves.toEqual({
+      checkoutSessionId: 'cs_test_123',
+      checkoutUrl: 'https://pay.openai.com/c/pay/cs_test_123#fragment',
+      processorEntity: 'openai_llc',
+    });
+
+    const requestBody = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(requestBody).toMatchObject({
+      entry_point: 'all_plans_pricing_modal',
+      plan_name: 'chatgptplusplan',
+      billing_details: { country: 'BR', currency: 'BRL' },
+      promo_campaign: {
+        promo_campaign_id: 'plus-1-month-free',
+        is_coupon_from_query_param: false,
+      },
+      checkout_ui_mode: 'hosted',
+    });
+  });
+
+  it('checkout 响应缺少 URL 时用 checkout session id 构造可存储 URL', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ checkout_session_id: 'cs_test_123' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(createCheckoutSession(ACCESS_TOKEN)).resolves.toMatchObject({
+      checkoutSessionId: 'cs_test_123',
+      checkoutUrl: 'https://checkout.stripe.com/c/pay/cs_test_123?redirect_pm_type=pix&ui_mode=custom',
+      processorEntity: 'openai_llc',
+    });
+  });
+
+  it('ChatGPT checkout 响应缺少 session id 时返回稳定错误码', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ url: 'https://pay.openai.com/c/pay/cs_test_123' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(createCheckoutSession(ACCESS_TOKEN)).rejects.toMatchObject({
       statusCode: 502,
       code: 'CHATGPT_CHECKOUT_FAILED',
       message: '无法创建 ChatGPT 结算链接，请稍后重试',
@@ -106,14 +151,17 @@ describe('chatgpt-session.service', () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({ ok: false, status: 502, text: async () => 'bad gateway' })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ url: 'https://pay.openai.com/c/pay/cs_test_123' }) });
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ checkout_session_id: 'cs_test_123', url: 'https://pay.openai.com/c/pay/cs_test_123' }),
+      });
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(
-      createCheckoutUrl(ACCESS_TOKEN, {
+      createCheckoutSession(ACCESS_TOKEN, {
         retry: { attempts: 3, backoffMs: [0, 0] },
       }),
-    ).resolves.toBe('https://pay.openai.com/c/pay/cs_test_123');
+    ).resolves.toMatchObject({ checkoutSessionId: 'cs_test_123' });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
@@ -127,7 +175,7 @@ describe('chatgpt-session.service', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(
-      createCheckoutUrl(ACCESS_TOKEN, {
+      createCheckoutSession(ACCESS_TOKEN, {
         retry: { attempts: 3, backoffMs: [0, 0] },
       }),
     ).rejects.toMatchObject({
@@ -135,5 +183,57 @@ describe('chatgpt-session.service', () => {
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('approve checkout 使用 checkout session id 和 processor entity', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ result: 'approved' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      approveCheckoutSession(
+        ACCESS_TOKEN,
+        { checkoutSessionId: 'cs_test_123', checkoutUrl: 'https://pay.openai.com/c/pay/cs_test_123', processorEntity: 'openai_llc' },
+      ),
+    ).resolves.toEqual({ result: 'approved', statusCode: 200 });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://chatgpt.com/backend-api/payments/checkout/approve',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ checkout_session_id: 'cs_test_123', processor_entity: 'openai_llc' }),
+      }),
+    );
+  });
+
+  it('approve checkout 缺少明确 approved 结果时不默认放行', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({}),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      approveCheckoutSession(
+        ACCESS_TOKEN,
+        { checkoutSessionId: 'cs_test_123', checkoutUrl: 'https://pay.openai.com/c/pay/cs_test_123', processorEntity: 'openai_llc' },
+      ),
+    ).resolves.toEqual({ result: 'error', statusCode: 200 });
+  });
+
+  it('approve checkout 返回空 body 时不默认放行', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      approveCheckoutSession(
+        ACCESS_TOKEN,
+        { checkoutSessionId: 'cs_test_123', checkoutUrl: 'https://pay.openai.com/c/pay/cs_test_123', processorEntity: 'openai_llc' },
+      ),
+    ).resolves.toEqual({ result: 'error', statusCode: 200 });
   });
 });
