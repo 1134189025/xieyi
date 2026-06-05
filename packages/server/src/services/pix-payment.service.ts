@@ -41,7 +41,7 @@ export async function generatePixPayment(
   credential: ChatGptSessionCredential,
   options: GeneratePixPaymentOptions = {},
 ): Promise<PixPaymentResult> {
-  const profile = withCredentialEmail(generateBrazilBillingProfile(), credential.email);
+  const profile = generateBrazilBillingProfile();
   const engineResult = await runEngine(credential, profile, options);
   const stripeResult = toStripeResult(engineResult);
   const qrPngBuffer = await QRCode.toBuffer(stripeResult.pix.data, {
@@ -119,11 +119,6 @@ function toStripeResult(engineResult: PixGoEngineResult): CreateStripePixPayment
       setupIntentStatus: engineResult.setupIntentStatus,
     },
   };
-}
-
-function withCredentialEmail(profile: BrazilBillingProfile, email: string | null): BrazilBillingProfile {
-  if (!email) return profile;
-  return { ...profile, email };
 }
 
 function checkoutUrl(checkoutSessionId: string): string {
