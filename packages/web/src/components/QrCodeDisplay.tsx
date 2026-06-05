@@ -12,11 +12,13 @@ interface QrCodeDisplayProps {
 export default function QrCodeDisplay({ pixCode, pixQrPngBase64, pixImageUrl, pixExpiresAt }: QrCodeDisplayProps) {
   const [copied, setCopied] = useState(false);
 
+  const imageUrl = pixImageUrl && isDirectImageUrl(pixImageUrl) ? pixImageUrl : null;
+  const instructionUrl = pixImageUrl && !imageUrl ? pixImageUrl : null;
   const imageSrc = pixQrPngBase64
     ? `data:image/png;base64,${pixQrPngBase64}`
-    : pixImageUrl ?? undefined;
+    : imageUrl ?? undefined;
 
-  if (!pixCode && !imageSrc) {
+  if (!pixCode && !imageSrc && !instructionUrl) {
     return <p className="text-center text-app-secondary">暂无 Pix 付款码</p>;
   }
 
@@ -38,6 +40,17 @@ export default function QrCodeDisplay({ pixCode, pixQrPngBase64, pixImageUrl, pi
         <div className="pix-qr-shell">
           <img src={imageSrc} alt="Pix 二维码" className="pix-qr-image" />
         </div>
+      )}
+
+      {instructionUrl && (
+        <a
+          href={instructionUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="checkout-link text-center"
+        >
+          打开 Pix 付款说明
+        </a>
       )}
 
       {pixCode && (
@@ -73,4 +86,13 @@ export default function QrCodeDisplay({ pixCode, pixQrPngBase64, pixImageUrl, pi
       )}
     </div>
   );
+}
+
+function isDirectImageUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return /\.(png|svg|jpg|jpeg|webp)$/i.test(url.pathname);
+  } catch {
+    return false;
+  }
 }

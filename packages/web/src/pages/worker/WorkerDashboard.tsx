@@ -260,9 +260,11 @@ function OrderCard({
 }
 
 function WorkerQrBlock({ order }: { order: OrderItem }) {
-  const qrImageSrc = order.pixImageUrl ?? (order.pixQrPngBase64 ? `data:image/png;base64,${order.pixQrPngBase64}` : null);
+  const imageUrl = order.pixImageUrl && isDirectImageUrl(order.pixImageUrl) ? order.pixImageUrl : null;
+  const instructionUrl = order.pixImageUrl && !imageUrl ? order.pixImageUrl : null;
+  const qrImageSrc = imageUrl ?? (order.pixQrPngBase64 ? `data:image/png;base64,${order.pixQrPngBase64}` : null);
 
-  if (!qrImageSrc) {
+  if (!qrImageSrc && !instructionUrl) {
     return (
       <div className="rounded-xl border border-dashed border-app-border p-6 text-center text-app-secondary">
         暂无二维码
@@ -271,12 +273,24 @@ function WorkerQrBlock({ order }: { order: OrderItem }) {
   }
 
   return (
-    <div className="flex justify-center">
-      <img
-        src={qrImageSrc}
-        alt="Pix 二维码"
-        className="h-auto w-full max-w-[320px] rounded-xl border border-app-border bg-white p-3"
-      />
+    <div className="flex flex-col items-center gap-3">
+      {qrImageSrc && (
+        <img
+          src={qrImageSrc}
+          alt="Pix 二维码"
+          className="h-auto w-full max-w-[320px] rounded-xl border border-app-border bg-white p-3"
+        />
+      )}
+      {instructionUrl && (
+        <a
+          href={instructionUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="text-sm font-semibold text-app-accent hover:text-app-accentHover"
+        >
+          打开 Pix 付款说明
+        </a>
+      )}
     </div>
   );
 }
@@ -332,6 +346,15 @@ function sortWorkerOrders(orders: OrderItem[]) {
     if (createdAtComparison !== 0) return createdAtComparison;
     return firstOrder.id.localeCompare(secondOrder.id);
   });
+}
+
+function isDirectImageUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return /\.(png|svg|jpg|jpeg|webp)$/i.test(url.pathname);
+  } catch {
+    return false;
+  }
 }
 
 const activeModeClass = 'rounded-lg bg-app-surface px-4 py-2 text-sm font-semibold text-app-primary shadow-sm';

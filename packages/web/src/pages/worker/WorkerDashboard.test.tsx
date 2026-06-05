@@ -73,7 +73,7 @@ interface WorkerOrder {
   id: string;
   trackingToken: string;
   status: string;
-  pixCode: string;
+  pixCode: string | null;
   pixQrPngBase64: string | null;
   pixExpiresAt: string | null;
   pixImageUrl: string | null;
@@ -302,6 +302,23 @@ describe('WorkerDashboard', () => {
     expect(container.textContent).toContain('#2');
     expect(container.querySelectorAll('img[alt="Pix 二维码"]')).toHaveLength(0);
     expect(readonlyInputValues(container)).toEqual(['pix-1', 'pix-2']);
+  });
+
+  it('托管 Pix 说明链接不作为二维码图片渲染', async () => {
+    mockDashboardLoad([
+      workerOrder({
+        pixCode: null,
+        pixQrPngBase64: null,
+        pixImageUrl: 'https://checkout.stripe.com/c/pay/cs_test_123',
+      }),
+    ]);
+
+    const { container, root } = renderWorkerDashboard();
+    mountedRoot = root;
+    await flushAsyncWork();
+
+    expect(container.querySelector('img[alt="Pix 二维码"]')).toBeNull();
+    expect(container.querySelector<HTMLAnchorElement>('a[href="https://checkout.stripe.com/c/pay/cs_test_123"]')?.textContent).toContain('打开 Pix 付款说明');
   });
 
   it('实时新增可领取任务不会直接进入我的任务列表', async () => {

@@ -214,6 +214,24 @@ describe('TrackOrderPage', () => {
     expect(container.querySelector<HTMLButtonElement>('button[aria-label="复制 Pix 付款码"]')).toBeNull();
   });
 
+  it('shows hosted Pix instructions as a link instead of a broken QR image', async () => {
+    (publicApi.get as Mock).mockResolvedValue({
+      data: {
+        ...pendingOrder(null),
+        pixCode: null,
+        pixImageUrl: 'https://checkout.stripe.com/c/pay/cs_test_123',
+      },
+    });
+
+    const { container, root } = renderTrackOrderPage();
+    mountedRoot = root;
+    await flushAsyncWork();
+
+    expect(container.querySelector<HTMLImageElement>('img[alt="Pix 二维码"]')).toBeNull();
+    expect(container.querySelector<HTMLAnchorElement>('a[href="https://checkout.stripe.com/c/pay/cs_test_123"]')?.textContent).toContain('打开 Pix 付款说明');
+    expect(container.querySelector<HTMLInputElement>('input[readonly]')).toBeNull();
+  });
+
   it('refreshes pending payment orders every 10 seconds and shows completion automatically', async () => {
     vi.useFakeTimers();
     (publicApi.get as Mock)
