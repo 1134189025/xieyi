@@ -1,4 +1,4 @@
-import { parseChatGptSessionInput, createCheckoutUrl } from './chatgpt-session.service.ts';
+import { parseChatGptSessionInput } from './chatgpt-session.service.ts';
 import { generatePixPayment } from './pix-payment.service.ts';
 import {
   recordProxyFailure,
@@ -58,14 +58,11 @@ export async function processPixGenerationJob(input: ProcessPixGenerationJobInpu
       retry: { attempts: 3 },
     };
 
-    failedPoolName = 'chatgpt';
-    failedProxy = chatGptProxy;
-    const checkoutUrl = await createCheckoutUrl(credential.accessToken, chatGptRequestOptions);
+    const { stripeResult, checkoutUrl, profile, qrPngBuffer } = await generatePixPayment(credential.accessToken, {
+      chatGpt: chatGptRequestOptions,
+      stripe: stripeRequestOptions,
+    });
     await recordProxySuccess('chatgpt', chatGptProxy?.id ?? null);
-
-    failedPoolName = 'stripe';
-    failedProxy = stripeProxy;
-    const { stripeResult, profile, qrPngBuffer } = await generatePixPayment(checkoutUrl, stripeRequestOptions);
     await recordProxySuccess('stripe', stripeProxy?.id ?? null);
 
     const pixExpiresAt = stripeResult.pix.expiresAt
@@ -99,6 +96,13 @@ export async function processPixGenerationJob(input: ProcessPixGenerationJobInpu
     if (!updatedOrder) return;
     broadcastOrderReady(updatedOrder);
   } catch (error) {
+    failedPoolName = proxyPoolNameFromError(error);
+    failedProxy = failedPoolName === 'chatgpt'
+      ? chatGptProxy
+      : failedPoolName === 'stripe'
+        ? stripeProxy
+        : null;
+
     if (failedPoolName && shouldCountProxyFailure(error)) {
       await recordProxyFailure(failedPoolName, failedProxy?.id ?? null, error);
     }
@@ -119,4 +123,9 @@ function publicGenerationErrorCode(error: unknown): string {
 
 function isTerminalGenerationError(errorCode: string): boolean {
   return TERMINAL_GENERATION_ERROR_CODES.has(errorCode);
+}
+
+function proxyPoolNameFromError(error: unknown): ProxyPoolName | null {
+  const value = (error as { proxyPoolName?: unknown }).proxyPoolName;
+  return value === 'chatgpt' || value === 'stripe' ? value : null;
 }

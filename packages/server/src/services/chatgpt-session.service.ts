@@ -12,7 +12,7 @@ const CHECKOUT_PAYLOAD = {
     promo_campaign_id: 'plus-1-month-free',
     is_coupon_from_query_param: false,
   },
-  checkout_ui_mode: 'redirect',
+  checkout_ui_mode: 'hosted',
 };
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -34,6 +34,17 @@ export interface UpstreamRequestOptions {
 
 export type ChatGptSessionCredential =
   { kind: 'access_token'; accessToken: string };
+
+export interface ChatGptCheckoutSession {
+  checkoutSessionId: string;
+  checkoutUrl: string;
+  processorEntity: string;
+}
+
+export interface ChatGptCheckoutApproval {
+  result: string;
+  statusCode: number;
+}
 
 export function isAccessToken(session: string): boolean {
   return isCompactJwt(session.trim());
@@ -90,14 +101,38 @@ function readNonEmptyString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
+async function readJsonResponse(response: Response): Promise<Record<string, unknown>> {
+  if (typeof response.text !== 'function' && typeof response.json === 'function') {
+    const parsed = await response.json() as unknown;
+    return isRecord(parsed) ? parsed : {};
+  }
+
+  const text = await response.text();
+  if (!text) return {};
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    return isRecord(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function firstNonEmptyString(...values: unknown[]): string | null {
+  for (const value of values) {
+    const text = readNonEmptyString(value);
+    if (text) return text;
+  }
+  return null;
+}
+
 function unrecognizedSessionError(): AppError {
   return new AppError(400, SESSION_UNRECOGNIZED_MESSAGE, 'CHATGPT_SESSION_UNRECOGNIZED');
 }
 
-export async function createCheckoutUrl(
+export async function createCheckoutSession(
   accessToken: string,
   requestOptions: number | UpstreamRequestOptions = DEFAULT_TIMEOUT_MS,
-): Promise<string> {
+): Promise<ChatGptCheckoutSession> {
   const options = normalizeRequestOptions(requestOptions);
   const response = await fetchWithTimeout('https://chatgpt.com/backend-api/payments/checkout', {
     method: 'POST',
@@ -113,13 +148,47 @@ export async function createCheckoutUrl(
     throw new AppError(502, CHECKOUT_FAILED_MESSAGE, 'CHATGPT_CHECKOUT_FAILED');
   }
 
-  const data = (await response.json()) as Record<string, unknown>;
-  const url = data.url ?? data.checkout_url ?? data.redirect_url;
-  if (typeof url !== 'string' || !url) {
+  const data = await readJsonResponse(response);
+  const checkoutSessionId = firstNonEmptyString(data.checkout_session_id, data.session_id, data.id);
+  if (!checkoutSessionId?.startsWith('cs_')) {
     throw new AppError(502, CHECKOUT_FAILED_MESSAGE, 'CHATGPT_CHECKOUT_FAILED');
   }
 
-  return url;
+  const checkoutUrl =
+    firstNonEmptyString(data.url, data.checkout_url, data.redirect_url, data.stripe_hosted_url) ??
+    `https://checkout.stripe.com/c/pay/${checkoutSessionId}?redirect_pm_type=pix&ui_mode=custom`;
+
+  return {
+    checkoutSessionId,
+    checkoutUrl,
+    processorEntity: firstNonEmptyString(data.processor_entity) ?? 'openai_llc',
+  };
+}
+
+export async function approveCheckoutSession(
+  accessToken: string,
+  checkoutSession: ChatGptCheckoutSession,
+  requestOptions: number | UpstreamRequestOptions = DEFAULT_TIMEOUT_MS,
+): Promise<ChatGptCheckoutApproval> {
+  const options = normalizeRequestOptions(requestOptions);
+  const response = await fetchWithTimeout('https://chatgpt.com/backend-api/payments/checkout/approve', {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      'content-type': 'application/json',
+      'user-agent': USER_AGENT,
+    },
+    body: JSON.stringify({
+      checkout_session_id: checkoutSession.checkoutSessionId,
+      processor_entity: checkoutSession.processorEntity,
+    }),
+  }, options);
+
+  const data = await readJsonResponse(response);
+  return {
+    result: firstNonEmptyString(data.result) ?? 'error',
+    statusCode: response.status,
+  };
 }
 
 type RequestInitWithDispatcher = RequestInit & { dispatcher?: unknown };

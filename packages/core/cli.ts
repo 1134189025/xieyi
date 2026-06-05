@@ -9,7 +9,6 @@ import {
   buildConfirmRequestBody,
   buildPaymentMethodRequestBody,
   createDirectStripePixPayment,
-  createStripePixPayment,
   createStripeRuntimeIdentifiers,
   parseCheckoutSessionId,
   type StripeHttpTransport,
@@ -88,14 +87,15 @@ export async function main(argv: string[]): Promise<void> {
   if (args.command === 'live') {
     const checkoutUrl = requiredOption(args, 'checkout-url');
     const outputDir = args.options.get('out') ?? path.resolve('协议支付', 'output');
-    const riskJson = requiredOption(args, 'risk-json');
-    const riskFields = JSON.parse(await readFile(riskJson, 'utf8')) as StripeRiskFields;
     const protocolFromHar = args.options.get('har')
       ? await loadStripePixProtocolFromHarFile(String(args.options.get('har')))
       : undefined;
     const profile = protocolFromHar?.profile ?? generateBrazilBillingProfile();
     const identifiers = protocolFromHar?.identifiers ?? createStripeRuntimeIdentifiers();
-    const result = await createStripePixPayment({
+    const riskFields = args.options.get('risk-json')
+      ? (JSON.parse(await readFile(String(args.options.get('risk-json')), 'utf8')) as Partial<StripeRiskFields>)
+      : protocolFromHar?.riskFields;
+    const result = await createDirectStripePixPayment({
       checkoutUrl,
       profile,
       riskFields,
