@@ -1,17 +1,14 @@
 import {
   generateBrazilBillingProfile,
-  pollStripePaymentPageForPixQr,
-  submitStripePixPayment,
   type BrazilBillingProfile,
   type CreateStripePixPaymentResult,
-  type StripeRetryOptions,
 } from '@pix/core';
 import QRCode from 'qrcode';
+import type { ChatGptSessionCredential } from './chatgpt-session.service.ts';
 import {
-  approveCheckoutSession,
-  createCheckoutSession,
-  type UpstreamRequestOptions,
-} from './chatgpt-session.service.ts';
+  runPixGoEngine,
+  type PixGoEngineResult,
+} from './pix-go-engine.service.ts';
 import type { ProxyPoolName } from './settings.service.ts';
 
 export interface PixPaymentResult {
@@ -22,53 +19,31 @@ export interface PixPaymentResult {
 }
 
 export interface GeneratePixPaymentOptions {
-  chatGpt?: UpstreamRequestOptions;
-  stripe?: StripeRequestOptions;
-}
-
-export interface StripeRequestOptions {
+  proxy?: PixPaymentProxyOptions;
   timeoutMs?: number;
-  proxyUrl?: string | null;
-  retry?: StripeRetryOptions;
 }
 
-export type PixPaymentUpstreamError = Error & { proxyPoolName?: ProxyPoolName };
+export interface PixPaymentProxyOptions {
+  proxyUrl?: string | null;
+  poolName?: ProxyPoolName | null;
+}
+
+export type PixPaymentUpstreamError = Error & {
+  proxyPoolName?: ProxyPoolName;
+  generationFailureDiagnostic?: {
+    stage: string | null;
+    detail: string | null;
+    httpStatus: number | null;
+  };
+};
 
 export async function generatePixPayment(
-  accessToken: string,
+  credential: ChatGptSessionCredential,
   options: GeneratePixPaymentOptions = {},
 ): Promise<PixPaymentResult> {
-  const profile = generateBrazilBillingProfile();
-  const checkoutSession = await runChatGptStep(
-    () => createCheckoutSession(accessToken, options.chatGpt ?? {}),
-  );
-
-  const stripeOptions = normalizeStripeOptions(options.stripe);
-  const submission = await runStripeStep(() => submitStripePixPayment({
-    checkoutSessionId: checkoutSession.checkoutSessionId,
-    checkoutUrl: checkoutSession.checkoutUrl,
-    profile,
-    timeoutMs: stripeOptions.timeoutMs,
-    proxyUrl: stripeOptions.proxyUrl ?? undefined,
-    retry: stripeOptions.retry,
-  }));
-
-  const pix = await approveAndResolvePix({
-    accessToken,
-    checkoutSession,
-    pix: submission.pix,
-    paymentMethodId: submission.paymentMethodId,
-    stripeOptions,
-    chatGptOptions: options.chatGpt ?? {},
-  });
-
-  const stripeResult: CreateStripePixPaymentResult = {
-    checkoutSessionId: submission.checkoutSessionId,
-    checkoutConfigId: submission.checkoutConfigId,
-    paymentMethodId: submission.paymentMethodId,
-    pix,
-  };
-
+  const profile = withCredentialEmail(generateBrazilBillingProfile(), credential.email);
+  const engineResult = await runEngine(credential, profile, options);
+  const stripeResult = toStripeResult(engineResult);
   const qrPngBuffer = await QRCode.toBuffer(stripeResult.pix.data, {
     type: 'png',
     errorCorrectionLevel: 'M',
@@ -78,75 +53,79 @@ export async function generatePixPayment(
 
   return {
     stripeResult,
-    checkoutUrl: checkoutSession.checkoutUrl,
+    checkoutUrl: engineResult.checkoutUrl ?? checkoutUrl(engineResult.checkoutSessionId),
     profile,
     qrPngBuffer,
   };
 }
 
-async function approveAndResolvePix(input: {
-  accessToken: string;
-  checkoutSession: Awaited<ReturnType<typeof createCheckoutSession>>;
-  pix: CreateStripePixPaymentResult['pix'] | null;
-  paymentMethodId: string;
-  stripeOptions: RequiredStripeRequestOptions;
-  chatGptOptions: UpstreamRequestOptions;
-}) {
-  const approval = await runChatGptStep(() =>
-    approveCheckoutSession(input.accessToken, input.checkoutSession, input.chatGptOptions),
-  );
-  if (approval.result === 'blocked') {
-    throw tagProxyPool(new Error('ChatGPT checkout approve blocked'), 'chatgpt');
-  }
-  if (approval.statusCode >= 400 || approval.result !== 'approved') {
-    throw tagProxyPool(new Error(`ChatGPT checkout approve failed: ${approval.result}`), 'chatgpt');
-  }
-
-  if (input.pix) return input.pix;
-
-  return runStripeStep(() => pollStripePaymentPageForPixQr({
-    checkoutSessionId: input.checkoutSession.checkoutSessionId,
-    paymentMethodId: input.paymentMethodId,
-    timeoutMs: input.stripeOptions.timeoutMs,
-    proxyUrl: input.stripeOptions.proxyUrl ?? undefined,
-    retry: input.stripeOptions.retry,
-  }));
-}
-
-async function runChatGptStep<T>(step: () => Promise<T>): Promise<T> {
+async function runEngine(
+  credential: ChatGptSessionCredential,
+  profile: BrazilBillingProfile,
+  options: GeneratePixPaymentOptions,
+): Promise<PixGoEngineResult> {
   try {
-    return await step();
+    return await runPixGoEngine({
+      credential,
+      proxyUrl: options.proxy?.proxyUrl ?? null,
+      billingProfile: profile,
+      useTrial: true,
+      maxApproveBlockedRetries: 3,
+      timeoutMs: options.timeoutMs,
+    });
   } catch (error) {
-    throw tagProxyPool(error, 'chatgpt');
+    throw tagPaymentError(error, options.proxy?.poolName ?? null);
   }
 }
 
-async function runStripeStep<T>(step: () => Promise<T>): Promise<T> {
-  try {
-    return await step();
-  } catch (error) {
-    throw tagProxyPool(error, 'stripe');
+function tagPaymentError(error: unknown, proxyPoolName: ProxyPoolName | null): PixPaymentUpstreamError {
+  const paymentError = error instanceof Error
+    ? error as PixPaymentUpstreamError
+    : new Error('Pix payment generation failed') as PixPaymentUpstreamError;
+
+  if (proxyPoolName) paymentError.proxyPoolName = proxyPoolName;
+
+  const diagnostic = (error as {
+    generationFailureDiagnostic?: PixPaymentUpstreamError['generationFailureDiagnostic'];
+  }).generationFailureDiagnostic;
+  if (diagnostic) {
+    paymentError.generationFailureDiagnostic = diagnostic;
+  } else {
+    const fields = error as { stage?: unknown; detail?: unknown; httpStatus?: unknown };
+    if (typeof fields.stage === 'string' || typeof fields.detail === 'string' || typeof fields.httpStatus === 'number') {
+      paymentError.generationFailureDiagnostic = {
+        stage: typeof fields.stage === 'string' ? fields.stage : null,
+        detail: typeof fields.detail === 'string' ? fields.detail : null,
+        httpStatus: typeof fields.httpStatus === 'number' ? fields.httpStatus : null,
+      };
+    }
   }
+
+  return paymentError;
 }
 
-function tagProxyPool(error: unknown, proxyPoolName: ProxyPoolName): PixPaymentUpstreamError {
-  if (error instanceof Error) {
-    (error as PixPaymentUpstreamError).proxyPoolName = proxyPoolName;
-    return error as PixPaymentUpstreamError;
-  }
-  return Object.assign(new Error('Pix payment generation failed'), { proxyPoolName });
-}
-
-interface RequiredStripeRequestOptions {
-  timeoutMs: number;
-  proxyUrl: string | null;
-  retry?: StripeRetryOptions;
-}
-
-function normalizeStripeOptions(options: StripeRequestOptions | undefined): RequiredStripeRequestOptions {
+function toStripeResult(engineResult: PixGoEngineResult): CreateStripePixPaymentResult {
   return {
-    timeoutMs: options?.timeoutMs ?? 30_000,
-    proxyUrl: options?.proxyUrl ?? null,
-    retry: options?.retry,
+    checkoutSessionId: engineResult.checkoutSessionId,
+    checkoutConfigId: undefined,
+    paymentMethodId: engineResult.paymentMethodId,
+    pix: {
+      data: engineResult.qrData,
+      hostedInstructionsUrl: engineResult.hostedInstructionsUrl,
+      imageUrlPng: engineResult.imageUrlPng,
+      expiresAt: engineResult.expiresAt,
+      setupIntentId: engineResult.setupIntentId,
+      setupIntentClientSecret: engineResult.setupIntentClientSecret,
+      setupIntentStatus: engineResult.setupIntentStatus,
+    },
   };
+}
+
+function withCredentialEmail(profile: BrazilBillingProfile, email: string | null): BrazilBillingProfile {
+  if (!email) return profile;
+  return { ...profile, email };
+}
+
+function checkoutUrl(checkoutSessionId: string): string {
+  return `https://checkout.stripe.com/c/pay/${checkoutSessionId}?redirect_pm_type=pix&ui_mode=custom`;
 }

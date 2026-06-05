@@ -34,21 +34,43 @@ vi.mock('../ws/index.ts', () => ({ broadcastOrderReady, broadcastOrderStatusChan
 
 const { processPixGenerationJob } = await import('./pix-generation.service.ts');
 
+const credential = {
+  kind: 'access_token' as const,
+  accessToken: 'access-token-value',
+  sessionToken: 'session-token-value',
+  deviceId: 'device-123',
+  email: 'customer@example.com',
+};
+
+const stripeProxy = {
+  id: 'stripe-proxy-1',
+  proxyUrl: 'http://stripe:user@br-proxy.example:10001',
+  maskedProxy: 'http://stripe:****@br-proxy.example:10001',
+};
+
+const chatGptProxy = {
+  id: 'chatgpt-proxy-1',
+  proxyUrl: 'http://chat:user@br-proxy.example:10000',
+  maskedProxy: 'http://chat:****@br-proxy.example:10000',
+};
+
+function queuedOrder() {
+  return {
+    id: 'order-1',
+    trackingToken: 'track-1',
+    status: 'CREATING_PAYMENT',
+    encryptedSessionData: 'encrypted:session-token-value',
+    generationQueuedAt: new Date('2026-06-01T00:00:00.000Z'),
+    createdAt: new Date('2026-06-01T00:00:00.000Z'),
+  };
+}
+
 describe('pix-generation.service', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    parseChatGptSessionInput.mockReturnValue({ kind: 'access_token', accessToken: 'access-token-value' });
-    selectHealthyProxy
-      .mockResolvedValueOnce({
-        id: 'chatgpt-proxy-1',
-        proxyUrl: 'http://chat:user@chat-proxy.example:10000',
-        maskedProxy: 'http://chat:****@chat-proxy.example:10000',
-      })
-      .mockResolvedValueOnce({
-        id: 'stripe-proxy-1',
-        proxyUrl: 'http://stripe:user@stripe-proxy.example:10001',
-        maskedProxy: 'http://stripe:****@stripe-proxy.example:10001',
-      });
+    parseChatGptSessionInput.mockReturnValue(credential);
+    selectHealthyProxy.mockResolvedValue(stripeProxy);
+    shouldCountProxyFailure.mockReturnValue(false);
     generatePixPayment.mockResolvedValue({
       stripeResult: {
         checkoutSessionId: 'cs_test_123',
@@ -61,23 +83,16 @@ describe('pix-generation.service', () => {
           setupIntentClientSecret: 'seti_test_123_secret_456',
         },
       },
+      checkoutUrl: 'https://checkout.stripe.com/c/pay/cs_test_123?redirect_pm_type=pix&ui_mode=custom',
       profile: { name: 'Cliente Teste' },
       qrPngBuffer: Buffer.from('png'),
     });
     prisma.order.updateMany.mockResolvedValue({ count: 1 });
   });
 
-  it('generates Pix for a queued order using directly extracted accessToken and separate proxies', async () => {
-    const queuedOrder = {
-      id: 'order-1',
-      trackingToken: 'track-1',
-      status: 'CREATING_PAYMENT',
-      encryptedSessionData: 'encrypted:session-token-value',
-      generationQueuedAt: new Date('2026-06-01T00:00:00.000Z'),
-      createdAt: new Date('2026-06-01T00:00:00.000Z'),
-    };
+  it('使用完整 ChatGPT 凭证和单个巴西代理生成 Pix 并落库', async () => {
     const pendingOrder = {
-      ...queuedOrder,
+      ...queuedOrder(),
       status: 'PENDING_PAYMENT',
       pixCode: 'pix-code',
       pixQrPng: Buffer.from('png'),
@@ -85,16 +100,20 @@ describe('pix-generation.service', () => {
       pixImageUrl: 'https://stripe.test/pix.png',
       completedAt: null,
     };
-    prisma.order.findUnique.mockResolvedValueOnce(queuedOrder).mockResolvedValueOnce(pendingOrder);
+    prisma.order.findUnique.mockResolvedValueOnce(queuedOrder()).mockResolvedValueOnce(pendingOrder);
 
     await processPixGenerationJob({ orderId: 'order-1', finalAttempt: false });
 
     expect(parseChatGptSessionInput).toHaveBeenCalledWith('session-token-value');
+    expect(selectHealthyProxy).toHaveBeenCalledTimes(1);
+    expect(selectHealthyProxy).toHaveBeenCalledWith('stripe');
     expect(generatePixPayment).toHaveBeenCalledWith(
-      'access-token-value',
+      credential,
       expect.objectContaining({
-        chatGpt: expect.objectContaining({ proxyUrl: 'http://chat:user@chat-proxy.example:10000' }),
-        stripe: expect.objectContaining({ proxyUrl: 'http://stripe:user@stripe-proxy.example:10001' }),
+        proxy: {
+          proxyUrl: 'http://stripe:user@br-proxy.example:10001',
+          poolName: 'stripe',
+        },
       }),
     );
     expect(prisma.order.updateMany).toHaveBeenLastCalledWith({
@@ -102,57 +121,59 @@ describe('pix-generation.service', () => {
       data: expect.objectContaining({
         status: 'PENDING_PAYMENT',
         checkoutSessionId: 'cs_test_123',
+        checkoutUrl: 'https://checkout.stripe.com/c/pay/cs_test_123?redirect_pm_type=pix&ui_mode=custom',
         setupIntentId: 'seti_test_123',
         encryptedSessionData: null,
         generationErrorCode: null,
         generationFinishedAt: expect.any(Date),
       }),
     });
-    expect(recordProxySuccess).toHaveBeenCalledWith('chatgpt', 'chatgpt-proxy-1');
     expect(recordProxySuccess).toHaveBeenCalledWith('stripe', 'stripe-proxy-1');
+    expect(recordProxySuccess).not.toHaveBeenCalledWith('chatgpt', expect.anything());
     expect(broadcastOrderReady).toHaveBeenCalledWith(pendingOrder);
-    expect(broadcastOrderStatusChange).not.toHaveBeenCalledWith(pendingOrder);
   });
 
-  it('retries proxy failures without releasing the code until the final attempt', async () => {
-    prisma.order.findUnique.mockResolvedValue({
-      id: 'order-1',
-      trackingToken: 'track-1',
-      status: 'CREATING_PAYMENT',
-      encryptedSessionData: 'encrypted:session-token-value',
-      generationQueuedAt: new Date('2026-06-01T00:00:00.000Z'),
-      createdAt: new Date('2026-06-01T00:00:00.000Z'),
+  it('Stripe 代理池为空时回退 ChatGPT 代理池作为单代理出口', async () => {
+    prisma.order.findUnique.mockResolvedValueOnce(queuedOrder()).mockResolvedValueOnce({
+      ...queuedOrder(),
+      status: 'PENDING_PAYMENT',
     });
-    const timeout = Object.assign(new Error('timeout'), { code: 'UPSTREAM_TIMEOUT' });
-    generatePixPayment.mockRejectedValue(Object.assign(timeout, { proxyPoolName: 'chatgpt' }));
+    selectHealthyProxy.mockReset();
+    selectHealthyProxy.mockResolvedValueOnce(null).mockResolvedValueOnce(chatGptProxy);
+
+    await processPixGenerationJob({ orderId: 'order-1', finalAttempt: false });
+
+    expect(selectHealthyProxy).toHaveBeenCalledWith('stripe');
+    expect(selectHealthyProxy).toHaveBeenCalledWith('chatgpt');
+    expect(generatePixPayment).toHaveBeenCalledWith(
+      credential,
+      expect.objectContaining({
+        proxy: {
+          proxyUrl: 'http://chat:user@br-proxy.example:10000',
+          poolName: 'chatgpt',
+        },
+      }),
+    );
+    expect(recordProxySuccess).toHaveBeenCalledWith('chatgpt', 'chatgpt-proxy-1');
+  });
+
+  it('可重试代理失败在非最终尝试不释放兑换码', async () => {
+    prisma.order.findUnique.mockResolvedValue(queuedOrder());
+    const timeout = Object.assign(new Error('timeout'), {
+      code: 'UPSTREAM_TIMEOUT',
+      proxyPoolName: 'stripe',
+      generationFailureDiagnostic: { stage: 'engine_io', detail: 'timeout', httpStatus: null },
+    });
+    generatePixPayment.mockRejectedValue(timeout);
     shouldCountProxyFailure.mockReturnValue(true);
 
     await expect(processPixGenerationJob({ orderId: 'order-1', finalAttempt: false })).rejects.toBe(timeout);
 
-    expect(recordProxyFailure).toHaveBeenCalledWith('chatgpt', 'chatgpt-proxy-1', timeout);
+    expect(recordProxyFailure).toHaveBeenCalledWith('stripe', 'stripe-proxy-1', timeout);
     expect(prisma.$executeRaw).not.toHaveBeenCalled();
   });
 
-  it('retries ChatGPT checkout failures without releasing the code until the final attempt', async () => {
-    prisma.order.findUnique.mockResolvedValue({
-      id: 'order-1',
-      trackingToken: 'track-1',
-      status: 'CREATING_PAYMENT',
-      encryptedSessionData: 'encrypted:session-token-value',
-      generationQueuedAt: new Date('2026-06-01T00:00:00.000Z'),
-      createdAt: new Date('2026-06-01T00:00:00.000Z'),
-    });
-    const checkoutFailure = Object.assign(new Error('checkout failed'), { code: 'CHATGPT_CHECKOUT_FAILED' });
-    generatePixPayment.mockRejectedValue(Object.assign(checkoutFailure, { proxyPoolName: 'chatgpt' }));
-    shouldCountProxyFailure.mockReturnValue(true);
-
-    await expect(processPixGenerationJob({ orderId: 'order-1', finalAttempt: false })).rejects.toBe(checkoutFailure);
-
-    expect(recordProxyFailure).toHaveBeenCalledWith('chatgpt', 'chatgpt-proxy-1', checkoutFailure);
-    expect(prisma.$executeRaw).not.toHaveBeenCalled();
-  });
-
-  it('rejects unparseable session input before selecting proxies without waiting for the final attempt', async () => {
+  it('无法识别 session 时不选代理并直接释放兑换码', async () => {
     const failedOrder = {
       id: 'order-1',
       trackingToken: 'track-1',
@@ -161,14 +182,7 @@ describe('pix-generation.service', () => {
       createdAt: new Date('2026-06-01T00:00:00.000Z'),
     };
     prisma.order.findUnique
-      .mockResolvedValueOnce({
-        id: 'order-1',
-        trackingToken: 'track-1',
-        status: 'CREATING_PAYMENT',
-        encryptedSessionData: 'encrypted:legacy-session-cookie',
-        generationQueuedAt: new Date('2026-06-01T00:00:00.000Z'),
-        createdAt: new Date('2026-06-01T00:00:00.000Z'),
-      })
+      .mockResolvedValueOnce(queuedOrder())
       .mockResolvedValueOnce(failedOrder);
     parseChatGptSessionInput.mockImplementation(() => {
       throw Object.assign(new Error('bad session'), { code: 'CHATGPT_SESSION_UNRECOGNIZED' });
@@ -183,7 +197,7 @@ describe('pix-generation.service', () => {
     expect(broadcastOrderStatusChange).toHaveBeenCalledWith(failedOrder);
   });
 
-  it('marks the order failed and releases the code when generation fails on the final attempt', async () => {
+  it('非 0 元账号无资格错误立即终止并写入脱敏诊断', async () => {
     const failedOrder = {
       id: 'order-1',
       trackingToken: 'track-1',
@@ -192,56 +206,28 @@ describe('pix-generation.service', () => {
       createdAt: new Date('2026-06-01T00:00:00.000Z'),
     };
     prisma.order.findUnique
-      .mockResolvedValueOnce({
-        id: 'order-1',
-        trackingToken: 'track-1',
-        status: 'CREATING_PAYMENT',
-        encryptedSessionData: 'encrypted:session-token-value',
-        generationQueuedAt: new Date('2026-06-01T00:00:00.000Z'),
-        createdAt: new Date('2026-06-01T00:00:00.000Z'),
-      })
+      .mockResolvedValueOnce(queuedOrder())
       .mockResolvedValueOnce(failedOrder);
     generatePixPayment.mockRejectedValue(Object.assign(new Error('account not eligible'), {
       statusCode: 400,
       code: 'ACCOUNT_NOT_ELIGIBLE',
+      proxyPoolName: 'stripe',
+      generationFailureDiagnostic: {
+        stage: 'stripe_init',
+        detail: 'amount_nonzero',
+        httpStatus: 200,
+      },
     }));
-    shouldCountProxyFailure.mockReturnValue(false);
-
-    await processPixGenerationJob({ orderId: 'order-1', finalAttempt: true });
-
-    expect(recordProxyFailure).not.toHaveBeenCalled();
-    expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
-    expect(broadcastOrderStatusChange).toHaveBeenCalledWith(failedOrder);
-  });
-
-  it('marks account-not-eligible failures terminal without waiting for the final attempt', async () => {
-    const failedOrder = {
-      id: 'order-1',
-      trackingToken: 'track-1',
-      status: 'FAILED',
-      completedAt: null,
-      createdAt: new Date('2026-06-01T00:00:00.000Z'),
-    };
-    prisma.order.findUnique
-      .mockResolvedValueOnce({
-        id: 'order-1',
-        trackingToken: 'track-1',
-        status: 'CREATING_PAYMENT',
-        encryptedSessionData: 'encrypted:session-token-value',
-        generationQueuedAt: new Date('2026-06-01T00:00:00.000Z'),
-        createdAt: new Date('2026-06-01T00:00:00.000Z'),
-      })
-      .mockResolvedValueOnce(failedOrder);
-    generatePixPayment.mockRejectedValue(Object.assign(new Error('account not eligible'), {
-      statusCode: 400,
-      code: 'ACCOUNT_NOT_ELIGIBLE',
-    }));
-    shouldCountProxyFailure.mockReturnValue(false);
 
     await processPixGenerationJob({ orderId: 'order-1', finalAttempt: false });
 
     expect(recordProxyFailure).not.toHaveBeenCalled();
     expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+    const rawSqlCall = String(prisma.$executeRaw.mock.calls[0]);
+    expect(rawSqlCall).toContain('ACCOUNT_NOT_ELIGIBLE');
+    expect(rawSqlCall).toContain('stripe_init');
+    expect(rawSqlCall).toContain('amount_nonzero');
+    expect(rawSqlCall).toContain('200');
     expect(broadcastOrderStatusChange).toHaveBeenCalledWith(failedOrder);
   });
 });

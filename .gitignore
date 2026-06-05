@@ -19,6 +19,8 @@ output/
 output-*/
 tmp/
 graphify-out/
+tools/pix-go-engine/pix-go-engine
+tools/pix-go-engine/pix-go-engine.exe
 
 # Logs
 *.log
