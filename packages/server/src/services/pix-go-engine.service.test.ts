@@ -137,6 +137,25 @@ describe('pix-go-engine.service', () => {
     expect(result.hostedInstructionsUrl).toBe('https://stripe.test/instructions');
   });
 
+  it('接受原生 Go 默认的缺失金额字段为 0 元结果', async () => {
+    mockEngineProcess(JSON.stringify({
+      ok: true,
+      checkout_session_id: 'cs_test_123',
+      checkout_url: 'https://checkout.stripe.com/c/pay/cs_test_123',
+      payment_method_id: 'pm_123',
+      amount: 0,
+      amount_present: false,
+      currency: 'brl',
+      qr_data: '000201payload',
+    }));
+
+    const result = await runPixGoEngine(request);
+
+    expect(result.amount).toBe(0);
+    expect(result.amountPresent).toBe(false);
+    expect(result.qrData).toBe('000201payload');
+  });
+
   it('引擎业务错误映射为 PixGoEngineError 且保留脱敏诊断', async () => {
     mockEngineProcess(JSON.stringify({
       ok: false,
@@ -188,7 +207,7 @@ describe('pix-go-engine.service', () => {
     expect(child.killed).toBe(true);
   });
 
-  it('缺少 0 元金额或 QR 时 fail-closed', async () => {
+  it('缺少 QR artifact 时 fail-closed', async () => {
     mockEngineProcess(JSON.stringify({
       ok: true,
       checkout_session_id: 'cs_test_123',

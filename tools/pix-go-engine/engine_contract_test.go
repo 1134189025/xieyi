@@ -101,7 +101,7 @@ func TestExecutePixFailsWhenZeroAmountHasNoQRArtifact(t *testing.T) {
 	}
 }
 
-func TestExecutePixFailsClosedWhenAmountMissing(t *testing.T) {
+func TestExecutePixDefaultsMissingAmountToZeroAfterQRCode(t *testing.T) {
 	response := executePix(validEngineRequest(), func(GPTToken, string, logFunc) (pixSession, error) {
 		return &fakePixSession{result: &PixResult{
 			CheckoutSessionID: "cs_test_123",
@@ -113,11 +113,11 @@ func TestExecutePixFailsClosedWhenAmountMissing(t *testing.T) {
 		}}, nil
 	}, &bytes.Buffer{})
 
-	if response.OK {
-		t.Fatal("expected missing amount to fail")
+	if !response.OK {
+		t.Fatalf("expected missing amount to default to zero after QR generation, got %+v", response.Error)
 	}
-	if response.Error.Code != "PAYMENT_FAILED" || response.Error.Stage != "engine_io" || response.Error.Detail != "amount_missing" {
-		t.Fatalf("unexpected error: %+v", response.Error)
+	if response.Amount != 0 || response.AmountPresent {
+		t.Fatalf("expected default zero amount with amount_present=false, got amount=%d present=%v", response.Amount, response.AmountPresent)
 	}
 }
 

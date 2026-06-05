@@ -43,8 +43,8 @@ type engineResponse struct {
 	ProcessorEntity         string             `json:"processor_entity,omitempty"`
 	PaymentMethodID         string             `json:"payment_method_id,omitempty"`
 	PaymentIntentID         string             `json:"payment_intent_id,omitempty"`
-	Amount                  int                `json:"amount,omitempty"`
-	AmountPresent           bool               `json:"amount_present,omitempty"`
+	Amount                  int                `json:"amount"`
+	AmountPresent           bool               `json:"amount_present"`
 	Currency                string             `json:"currency,omitempty"`
 	QRData                  string             `json:"qr_data,omitempty"`
 	ImageURLPNG             string             `json:"image_url_png,omitempty"`
@@ -160,14 +160,11 @@ func responseFromResult(result *PixResult) engineResponse {
 	if result == nil {
 		return errorResponse("PAYMENT_FAILED", 502, "engine_io", "empty_result", 0)
 	}
-	if !result.AmountPresent {
-		return errorResponse("PAYMENT_FAILED", 502, "engine_io", "amount_missing", 0)
+	if !result.HasQR() {
+		return errorResponse("PAYMENT_FAILED", 502, "engine_io", "invalid_success_payload", 0)
 	}
 	if result.Amount > 0 {
 		return errorResponse("ACCOUNT_NOT_ELIGIBLE", 400, "stripe_init", "amount_nonzero", 200)
-	}
-	if !result.HasQR() {
-		return errorResponse("PAYMENT_FAILED", 502, "engine_io", "invalid_success_payload", 0)
 	}
 
 	return engineResponse{

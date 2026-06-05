@@ -103,12 +103,15 @@ describe('pix-payment.service', () => {
     expect(runPixGoEngine).toHaveBeenCalledWith(expect.objectContaining({
       credential,
       proxyUrl: 'http://stripe:user@br-proxy.example:10001',
-      billingProfile: profile,
+      billingProfile: expect.objectContaining({
+        ...profile,
+        email: 'chatgpt-user@example.com',
+      }),
       useTrial: true,
       maxApproveBlockedRetries: 3,
     }));
     expect(result.checkoutUrl).toBe(engineSuccess.checkoutUrl);
-    expect(result.profile.email).toBe('generated@example.com');
+    expect(result.profile.email).toBe('chatgpt-user@example.com');
     expect(result.stripeResult).toEqual({
       checkoutSessionId: 'cs_test_123',
       checkoutConfigId: undefined,

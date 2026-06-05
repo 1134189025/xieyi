@@ -41,8 +41,16 @@ export async function generatePixPayment(
   credential: ChatGptSessionCredential,
   options: GeneratePixPaymentOptions = {},
 ): Promise<PixPaymentResult> {
-  const profile = generateBrazilBillingProfile();
-  const engineResult = await runEngine(credential, profile, options);
+  const generatedProfile = generateBrazilBillingProfile();
+  const accountEmail = credential.email?.trim() || null;
+  const profile = accountEmail
+    ? { ...generatedProfile, email: accountEmail }
+    : generatedProfile;
+  const engineBillingProfile = {
+    ...profile,
+    email: accountEmail ?? '',
+  };
+  const engineResult = await runEngine(credential, engineBillingProfile, options);
   const stripeResult = toStripeResult(engineResult);
   const qrPngBuffer = stripeResult.pix.data
     ? await QRCode.toBuffer(stripeResult.pix.data, {
