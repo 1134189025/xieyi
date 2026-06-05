@@ -100,6 +100,43 @@ describe('pix-go-engine.service', () => {
     expect(result.qrData).toBe('000201payload');
   });
 
+  it('接受只有 Stripe PNG 图片的成功响应', async () => {
+    mockEngineProcess(JSON.stringify({
+      ok: true,
+      checkout_session_id: 'cs_test_123',
+      checkout_url: 'https://checkout.stripe.com/c/pay/cs_test_123',
+      payment_method_id: 'pm_123',
+      amount: 0,
+      amount_present: true,
+      currency: 'brl',
+      qr_data: '',
+      image_url_png: 'https://stripe.test/pix.png',
+    }));
+
+    const result = await runPixGoEngine(request);
+
+    expect(result.qrData).toBe('');
+    expect(result.imageUrlPng).toBe('https://stripe.test/pix.png');
+  });
+
+  it('接受只有 Stripe hosted instructions 链接的成功响应', async () => {
+    mockEngineProcess(JSON.stringify({
+      ok: true,
+      checkout_session_id: 'cs_test_123',
+      checkout_url: 'https://checkout.stripe.com/c/pay/cs_test_123',
+      payment_method_id: 'pm_123',
+      amount: 0,
+      amount_present: true,
+      currency: 'brl',
+      hosted_instructions_url: 'https://stripe.test/instructions',
+    }));
+
+    const result = await runPixGoEngine(request);
+
+    expect(result.qrData).toBe('');
+    expect(result.hostedInstructionsUrl).toBe('https://stripe.test/instructions');
+  });
+
   it('引擎业务错误映射为 PixGoEngineError 且保留脱敏诊断', async () => {
     mockEngineProcess(JSON.stringify({
       ok: false,
@@ -158,6 +195,26 @@ describe('pix-go-engine.service', () => {
       payment_method_id: 'pm_123',
       amount: 0,
       amount_present: false,
+      currency: 'brl',
+      qr_data: '',
+    }));
+
+    const promise = runPixGoEngine(request);
+    await expect(promise).rejects.toBeInstanceOf(PixGoEngineError);
+    await expect(promise).rejects.toMatchObject({
+      code: 'PAYMENT_FAILED',
+      stage: 'engine_io',
+      detail: 'invalid_success_payload',
+    });
+  });
+
+  it('0 元成功响应完全没有 QR artifact 时 fail-closed', async () => {
+    mockEngineProcess(JSON.stringify({
+      ok: true,
+      checkout_session_id: 'cs_test_123',
+      payment_method_id: 'pm_123',
+      amount: 0,
+      amount_present: true,
       currency: 'brl',
       qr_data: '',
     }));

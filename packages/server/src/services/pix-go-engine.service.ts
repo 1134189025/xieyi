@@ -178,7 +178,7 @@ function parseEngineOutput(stdout: string, stderr: string, exitCode: number | nu
   }
 
   const result = mapSuccessResponse(response);
-  if (!result.amountPresent || result.amount !== 0 || !result.qrData) {
+  if (!result.amountPresent || result.amount !== 0 || !hasQrArtifact(result)) {
     throw new PixGoEngineError('Pix Go engine returned an invalid success payload', {
       code: result.amountPresent && result.amount > 0 ? 'ACCOUNT_NOT_ELIGIBLE' : 'PAYMENT_FAILED',
       statusCode: result.amountPresent && result.amount > 0 ? 400 : 502,
@@ -195,6 +195,15 @@ function parseEngineOutput(stdout: string, stderr: string, exitCode: number | nu
     });
   }
   return result;
+}
+
+function hasQrArtifact(result: Pick<PixGoEngineResult, 'qrData' | 'imageUrlPng' | 'imageUrlSvg' | 'hostedInstructionsUrl'>): boolean {
+  return Boolean(
+    result.qrData.trim()
+      || result.imageUrlPng
+      || result.imageUrlSvg
+      || result.hostedInstructionsUrl,
+  );
 }
 
 function mapSuccessResponse(response: EngineResponse): PixGoEngineResult {

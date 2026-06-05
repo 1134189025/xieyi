@@ -196,6 +196,24 @@ describe('TrackOrderPage', () => {
     expect(container.querySelector<HTMLInputElement>('input[readonly]')?.value).toBe('pix-code');
   });
 
+  it('shows Pix image when payment code is absent but pixImageUrl is available', async () => {
+    (publicApi.get as Mock).mockResolvedValue({
+      data: {
+        ...pendingOrder(null),
+        pixCode: null,
+        pixImageUrl: 'https://stripe.test/pix.png',
+      },
+    });
+
+    const { container, root } = renderTrackOrderPage();
+    mountedRoot = root;
+    await flushAsyncWork();
+
+    expect(container.querySelector<HTMLImageElement>('img[alt="Pix 二维码"]')?.src).toBe('https://stripe.test/pix.png');
+    expect(container.querySelector<HTMLInputElement>('input[readonly]')).toBeNull();
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="复制 Pix 付款码"]')).toBeNull();
+  });
+
   it('refreshes pending payment orders every 10 seconds and shows completion automatically', async () => {
     vi.useFakeTimers();
     (publicApi.get as Mock)

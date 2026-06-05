@@ -63,6 +63,13 @@ export async function processPixGenerationJob(input: ProcessPixGenerationJobInpu
     const pixExpiresAt = stripeResult.pix.expiresAt
       ? new Date(stripeResult.pix.expiresAt * 1000)
       : null;
+    const pixCode = stripeResult.pix.data?.trim() || null;
+    const pixQrPng = qrPngBuffer ? new Uint8Array(qrPngBuffer) : null;
+    const pixImageUrl = firstUsableUrl(
+      stripeResult.pix.imageUrlPng,
+      stripeResult.pix.imageUrlSvg,
+      stripeResult.pix.hostedInstructionsUrl,
+    );
 
     const changed = await prisma.order.updateMany({
       where: { id: input.orderId, status: 'CREATING_PAYMENT' },
@@ -71,10 +78,10 @@ export async function processPixGenerationJob(input: ProcessPixGenerationJobInpu
         checkoutSessionId: stripeResult.checkoutSessionId,
         checkoutUrl,
         paymentMethodId: stripeResult.paymentMethodId,
-        pixCode: stripeResult.pix.data,
-        pixQrPng: new Uint8Array(qrPngBuffer),
+        pixCode,
+        pixQrPng,
         pixExpiresAt,
-        pixImageUrl: stripeResult.pix.imageUrlPng,
+        pixImageUrl,
         setupIntentId: stripeResult.pix.setupIntentId ?? null,
         setupIntentClientSecret: stripeResult.pix.setupIntentClientSecret
           ? encrypt(stripeResult.pix.setupIntentClientSecret)
@@ -144,4 +151,12 @@ function generationFailureDiagnosticFromError(error: unknown) {
     detail: diagnostic?.detail ?? null,
     httpStatus: diagnostic?.httpStatus ?? null,
   };
+}
+
+function firstUsableUrl(...urls: Array<string | undefined>): string | null {
+  for (const url of urls) {
+    const trimmedUrl = url?.trim();
+    if (trimmedUrl) return trimmedUrl;
+  }
+  return null;
 }

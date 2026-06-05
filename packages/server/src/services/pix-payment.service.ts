@@ -15,7 +15,7 @@ export interface PixPaymentResult {
   stripeResult: CreateStripePixPaymentResult;
   checkoutUrl: string;
   profile: BrazilBillingProfile;
-  qrPngBuffer: Buffer;
+  qrPngBuffer: Buffer | null;
 }
 
 export interface GeneratePixPaymentOptions {
@@ -44,12 +44,14 @@ export async function generatePixPayment(
   const profile = generateBrazilBillingProfile();
   const engineResult = await runEngine(credential, profile, options);
   const stripeResult = toStripeResult(engineResult);
-  const qrPngBuffer = await QRCode.toBuffer(stripeResult.pix.data, {
-    type: 'png',
-    errorCorrectionLevel: 'M',
-    margin: 2,
-    scale: 8,
-  });
+  const qrPngBuffer = stripeResult.pix.data
+    ? await QRCode.toBuffer(stripeResult.pix.data, {
+      type: 'png',
+      errorCorrectionLevel: 'M',
+      margin: 2,
+      scale: 8,
+    })
+    : null;
 
   return {
     stripeResult,
@@ -105,14 +107,16 @@ function tagPaymentError(error: unknown, proxyPoolName: ProxyPoolName | null): P
 }
 
 function toStripeResult(engineResult: PixGoEngineResult): CreateStripePixPaymentResult {
+  const qrData = engineResult.qrData.trim();
   return {
     checkoutSessionId: engineResult.checkoutSessionId,
     checkoutConfigId: undefined,
     paymentMethodId: engineResult.paymentMethodId,
     pix: {
-      data: engineResult.qrData,
+      data: qrData || null,
       hostedInstructionsUrl: engineResult.hostedInstructionsUrl,
       imageUrlPng: engineResult.imageUrlPng,
+      imageUrlSvg: engineResult.imageUrlSvg,
       expiresAt: engineResult.expiresAt,
       setupIntentId: engineResult.setupIntentId,
       setupIntentClientSecret: engineResult.setupIntentClientSecret,

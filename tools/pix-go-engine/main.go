@@ -166,7 +166,7 @@ func responseFromResult(result *PixResult) engineResponse {
 	if result.Amount > 0 {
 		return errorResponse("ACCOUNT_NOT_ELIGIBLE", 400, "stripe_init", "amount_nonzero", 200)
 	}
-	if strings.TrimSpace(result.QRData) == "" {
+	if !result.HasQR() {
 		return errorResponse("PAYMENT_FAILED", 502, "engine_io", "invalid_success_payload", 0)
 	}
 

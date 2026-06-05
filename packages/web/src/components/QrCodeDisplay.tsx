@@ -12,15 +12,16 @@ interface QrCodeDisplayProps {
 export default function QrCodeDisplay({ pixCode, pixQrPngBase64, pixImageUrl, pixExpiresAt }: QrCodeDisplayProps) {
   const [copied, setCopied] = useState(false);
 
-  if (!pixCode) {
-    return <p className="text-center text-app-secondary">暂无 Pix 付款码</p>;
-  }
-
   const imageSrc = pixQrPngBase64
     ? `data:image/png;base64,${pixQrPngBase64}`
     : pixImageUrl ?? undefined;
 
+  if (!pixCode && !imageSrc) {
+    return <p className="text-center text-app-secondary">暂无 Pix 付款码</p>;
+  }
+
   const handleCopy = async () => {
+    if (!pixCode) return;
     try {
       await navigator.clipboard.writeText(pixCode);
       setCopied(true);
@@ -39,26 +40,28 @@ export default function QrCodeDisplay({ pixCode, pixQrPngBase64, pixImageUrl, pi
         </div>
       )}
 
-      <div>
-        <label className="checkout-label">Pix 付款码</label>
-        <div className="pix-code-row">
-          <input
-            type="text"
-            readOnly
-            value={pixCode}
-            className="pix-code-input"
-            onClick={(e) => (e.target as HTMLInputElement).select()}
-          />
-          <button
-            type="button"
-            onClick={handleCopy}
-            className="checkout-icon-button"
-            aria-label="复制 Pix 付款码"
-          >
-            {copied ? <Check size={16} /> : <Copy size={16} />}
-          </button>
+      {pixCode && (
+        <div>
+          <label className="checkout-label">Pix 付款码</label>
+          <div className="pix-code-row">
+            <input
+              type="text"
+              readOnly
+              value={pixCode}
+              className="pix-code-input"
+              onClick={(e) => (e.target as HTMLInputElement).select()}
+            />
+            <button
+              type="button"
+              onClick={handleCopy}
+              className="checkout-icon-button"
+              aria-label="复制 Pix 付款码"
+            >
+              {copied ? <Check size={16} /> : <Copy size={16} />}
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       {pixExpiresAt && (
         <div className="flex justify-between border-t border-app-border pt-4 text-sm">
