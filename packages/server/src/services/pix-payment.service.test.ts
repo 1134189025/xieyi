@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const generateBrazilBillingProfile = vi.fn();
 const runPixGoEngine = vi.fn();
+const qrToBuffer = vi.fn();
 
 class TestPixGoEngineError extends Error {
   code: string;
@@ -28,6 +29,12 @@ class TestPixGoEngineError extends Error {
 
 vi.mock('@pix/core', () => ({
   generateBrazilBillingProfile,
+}));
+
+vi.mock('qrcode', () => ({
+  default: {
+    toBuffer: qrToBuffer,
+  },
 }));
 
 vi.mock('./pix-go-engine.service.ts', () => ({
@@ -82,6 +89,7 @@ describe('pix-payment.service', () => {
     vi.clearAllMocks();
     generateBrazilBillingProfile.mockReturnValue(profile);
     runPixGoEngine.mockResolvedValue(engineSuccess);
+    qrToBuffer.mockResolvedValue(Buffer.from('png'));
   });
 
   it('调用 Go 引擎生成 0 元 Pix 并映射回现有订单结果形状', async () => {
@@ -112,13 +120,34 @@ describe('pix-payment.service', () => {
         data: '000201valid-pix-payload',
         hostedInstructionsUrl: 'https://stripe.test/instructions',
         imageUrlPng: 'https://stripe.test/pix.png',
+        imageUrlSvg: 'https://stripe.test/pix.svg',
         expiresAt: 1781111404,
         setupIntentId: 'seti_123',
         setupIntentClientSecret: 'seti_123_secret_456',
         setupIntentStatus: 'requires_action',
       },
     });
-    expect(result.qrPngBuffer.length).toBeGreaterThan(0);
+    expect(qrToBuffer).toHaveBeenCalledWith('000201valid-pix-payload', expect.objectContaining({ type: 'png' }));
+    expect(result.qrPngBuffer).toEqual(Buffer.from('png'));
+  });
+
+  it('Go 引擎只有图片链接时不生成本地 PNG 但仍返回可展示 Pix 结果', async () => {
+    runPixGoEngine.mockResolvedValue({
+      ...engineSuccess,
+      qrData: '',
+      imageUrlPng: 'https://stripe.test/pix.png',
+      imageUrlSvg: undefined,
+      hostedInstructionsUrl: undefined,
+    });
+
+    const result = await generatePixPayment(credential);
+
+    expect(qrToBuffer).not.toHaveBeenCalled();
+    expect(result.qrPngBuffer).toBeNull();
+    expect(result.stripeResult.pix).toMatchObject({
+      data: null,
+      imageUrlPng: 'https://stripe.test/pix.png',
+    });
   });
 
   it('Go 引擎没有返回 setup_intent 时不伪造自动检测字段', async () => {

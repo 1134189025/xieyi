@@ -27,16 +27,17 @@ export async function main(argv: string[]): Promise<void> {
     const harPath = requiredOption(args, 'har');
     const outputDir = args.options.get('out') ?? path.resolve('协议支付', 'output');
     const protocol = await loadStripePixProtocolFromHarFile(harPath);
+    const pixCode = requirePixCode(protocol.pix.data);
     const artifactFiles = await writePixQrArtifacts({
       outputDir,
-      pixCode: protocol.pix.data,
+      pixCode,
       fileBaseName: 'pix',
     });
     await writeJson(path.join(outputDir, 'protocol-report.json'), protocol);
     await writeJson(path.join(outputDir, 'risk-fields.json'), protocol.riskFields);
     await writeJson(path.join(outputDir, 'profile.json'), protocol.profile);
 
-    console.log(JSON.stringify({ outputDir, artifactFiles, pixCode: protocol.pix.data }, null, 2));
+    console.log(JSON.stringify({ outputDir, artifactFiles, pixCode }, null, 2));
     return;
   }
 
@@ -104,9 +105,10 @@ export async function main(argv: string[]): Promise<void> {
       checkoutConfigId: protocolFromHar?.checkoutConfigId,
     });
 
+    const pixCode = requirePixCode(result.pix.data);
     const artifactFiles = await writePixQrArtifacts({
       outputDir,
-      pixCode: result.pix.data,
+      pixCode,
       fileBaseName: 'pix-live',
     });
     await writeJson(path.join(outputDir, 'live-result.json'), {
@@ -114,7 +116,7 @@ export async function main(argv: string[]): Promise<void> {
       profile,
       artifactFiles,
     });
-    console.log(JSON.stringify({ outputDir, artifactFiles, pixCode: result.pix.data }, null, 2));
+    console.log(JSON.stringify({ outputDir, artifactFiles, pixCode }, null, 2));
     return;
   }
 
@@ -136,9 +138,10 @@ export async function main(argv: string[]): Promise<void> {
         riskFields,
         transport,
       });
+      const pixCode = requirePixCode(result.pix.data);
       const artifactFiles = await writePixQrArtifacts({
         outputDir,
-        pixCode: result.pix.data,
+        pixCode,
         fileBaseName: 'pix-direct',
       });
       await writeJson(path.join(outputDir, 'direct-result.json'), {
@@ -146,7 +149,7 @@ export async function main(argv: string[]): Promise<void> {
         profile,
         artifactFiles,
       });
-      console.log(JSON.stringify({ outputDir, artifactFiles, pixCode: result.pix.data }, null, 2));
+      console.log(JSON.stringify({ outputDir, artifactFiles, pixCode }, null, 2));
     } catch (error: unknown) {
       await writeJson(path.join(outputDir, 'direct-error.json'), {
         message: error instanceof Error ? error.message : String(error),
@@ -185,6 +188,11 @@ function requiredOption(args: ParsedArgs, key: string): string {
 
 function cryptoRandomToken(): string {
   return randomUUID();
+}
+
+function requirePixCode(pixCode: string | null | undefined): string {
+  if (!pixCode) throw new Error('Pix QR code payload not found in protocol result');
+  return pixCode;
 }
 
 async function writeJson(filePath: string, value: unknown): Promise<void> {

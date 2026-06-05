@@ -42,7 +42,66 @@ func TestExecutePixReturnsZeroAmountQRCode(t *testing.T) {
 	}
 }
 
-func TestExecutePixFailsClosedWhenAmountMissing(t *testing.T) {
+func TestExecutePixReturnsImageOnlyQRCode(t *testing.T) {
+	response := executePix(validEngineRequest(), func(GPTToken, string, logFunc) (pixSession, error) {
+		return &fakePixSession{result: &PixResult{
+			CheckoutSessionID: "cs_test_123",
+			PaymentMethodID:   "pm_123",
+			Amount:            0,
+			AmountPresent:     true,
+			Currency:          "brl",
+			ImageURLPNG:       "https://stripe.test/pix.png",
+		}}, nil
+	}, &bytes.Buffer{})
+
+	if !response.OK {
+		t.Fatalf("expected image-only QR artifact to succeed, got %+v", response.Error)
+	}
+	if response.QRData != "" || response.ImageURLPNG != "https://stripe.test/pix.png" {
+		t.Fatalf("unexpected response: %+v", response)
+	}
+}
+
+func TestExecutePixReturnsHostedInstructionsOnlyQRCode(t *testing.T) {
+	response := executePix(validEngineRequest(), func(GPTToken, string, logFunc) (pixSession, error) {
+		return &fakePixSession{result: &PixResult{
+			CheckoutSessionID:     "cs_test_123",
+			PaymentMethodID:       "pm_123",
+			Amount:                0,
+			AmountPresent:         true,
+			Currency:              "brl",
+			HostedInstructionsURL: "https://stripe.test/instructions",
+		}}, nil
+	}, &bytes.Buffer{})
+
+	if !response.OK {
+		t.Fatalf("expected hosted-instructions QR artifact to succeed, got %+v", response.Error)
+	}
+	if response.HostedInstructionsURL != "https://stripe.test/instructions" {
+		t.Fatalf("unexpected hosted instructions URL: %q", response.HostedInstructionsURL)
+	}
+}
+
+func TestExecutePixFailsWhenZeroAmountHasNoQRArtifact(t *testing.T) {
+	response := executePix(validEngineRequest(), func(GPTToken, string, logFunc) (pixSession, error) {
+		return &fakePixSession{result: &PixResult{
+			CheckoutSessionID: "cs_test_123",
+			PaymentMethodID:   "pm_123",
+			Amount:            0,
+			AmountPresent:     true,
+			Currency:          "brl",
+		}}, nil
+	}, &bytes.Buffer{})
+
+	if response.OK {
+		t.Fatal("expected missing QR artifact to fail")
+	}
+	if response.Error.Stage != "engine_io" || response.Error.Detail != "invalid_success_payload" {
+		t.Fatalf("unexpected error: %+v", response.Error)
+	}
+}
+
+func TestExecutePixDefaultsMissingAmountToZeroAfterQRCode(t *testing.T) {
 	response := executePix(validEngineRequest(), func(GPTToken, string, logFunc) (pixSession, error) {
 		return &fakePixSession{result: &PixResult{
 			CheckoutSessionID: "cs_test_123",
@@ -54,11 +113,11 @@ func TestExecutePixFailsClosedWhenAmountMissing(t *testing.T) {
 		}}, nil
 	}, &bytes.Buffer{})
 
-	if response.OK {
-		t.Fatal("expected missing amount to fail")
+	if !response.OK {
+		t.Fatalf("expected missing amount to default to zero after QR generation, got %+v", response.Error)
 	}
-	if response.Error.Code != "PAYMENT_FAILED" || response.Error.Stage != "engine_io" || response.Error.Detail != "amount_missing" {
-		t.Fatalf("unexpected error: %+v", response.Error)
+	if response.Amount != 0 || response.AmountPresent {
+		t.Fatalf("expected default zero amount with amount_present=false, got amount=%d present=%v", response.Amount, response.AmountPresent)
 	}
 }
 

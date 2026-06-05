@@ -178,12 +178,12 @@ function parseEngineOutput(stdout: string, stderr: string, exitCode: number | nu
   }
 
   const result = mapSuccessResponse(response);
-  if (!result.amountPresent || result.amount !== 0 || !result.qrData) {
+  if (!hasQrArtifact(result) || result.amount !== 0) {
     throw new PixGoEngineError('Pix Go engine returned an invalid success payload', {
-      code: result.amountPresent && result.amount > 0 ? 'ACCOUNT_NOT_ELIGIBLE' : 'PAYMENT_FAILED',
-      statusCode: result.amountPresent && result.amount > 0 ? 400 : 502,
-      stage: result.amountPresent && result.amount > 0 ? 'stripe_init' : 'engine_io',
-      detail: result.amountPresent && result.amount > 0 ? 'amount_nonzero' : 'invalid_success_payload',
+      code: result.amount > 0 ? 'ACCOUNT_NOT_ELIGIBLE' : 'PAYMENT_FAILED',
+      statusCode: result.amount > 0 ? 400 : 502,
+      stage: result.amount > 0 ? 'stripe_init' : 'engine_io',
+      detail: result.amount > 0 ? 'amount_nonzero' : 'invalid_success_payload',
     });
   }
   if (exitCode !== 0) {
@@ -197,6 +197,15 @@ function parseEngineOutput(stdout: string, stderr: string, exitCode: number | nu
   return result;
 }
 
+function hasQrArtifact(result: Pick<PixGoEngineResult, 'qrData' | 'imageUrlPng' | 'imageUrlSvg' | 'hostedInstructionsUrl'>): boolean {
+  return Boolean(
+    result.qrData.trim()
+      || result.imageUrlPng
+      || result.imageUrlSvg
+      || result.hostedInstructionsUrl,
+  );
+}
+
 function mapSuccessResponse(response: EngineResponse): PixGoEngineResult {
   return {
     checkoutSessionId: readString(response.checkout_session_id),
@@ -204,7 +213,7 @@ function mapSuccessResponse(response: EngineResponse): PixGoEngineResult {
     processorEntity: readOptionalString(response.processor_entity),
     paymentMethodId: readString(response.payment_method_id),
     paymentIntentId: readOptionalString(response.payment_intent_id),
-    amount: typeof response.amount === 'number' ? response.amount : Number.NaN,
+    amount: readAmount(response),
     amountPresent: response.amount_present === true,
     currency: readOptionalString(response.currency),
     qrData: readString(response.qr_data),
@@ -216,6 +225,12 @@ function mapSuccessResponse(response: EngineResponse): PixGoEngineResult {
     setupIntentClientSecret: readOptionalString(response.setup_intent_client_secret),
     setupIntentStatus: readOptionalString(response.setup_intent_status),
   };
+}
+
+function readAmount(response: EngineResponse): number {
+  if (typeof response.amount === 'number' && Number.isFinite(response.amount)) return response.amount;
+  if (response.amount_present === false || response.amount === undefined) return 0;
+  return Number.NaN;
 }
 
 function toEngineRequest(input: PixGoEngineInput) {

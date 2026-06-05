@@ -133,6 +133,48 @@ describe('pix-generation.service', () => {
     expect(broadcastOrderReady).toHaveBeenCalledWith(pendingOrder);
   });
 
+  it('只有 Stripe 图片链接且没有 Pix 码串时仍进入待付款并落库图片', async () => {
+    const pendingOrder = {
+      ...queuedOrder(),
+      status: 'PENDING_PAYMENT',
+      pixCode: null,
+      pixQrPng: null,
+      pixExpiresAt: null,
+      pixImageUrl: 'https://stripe.test/pix.png',
+      completedAt: null,
+    };
+    prisma.order.findUnique.mockResolvedValueOnce(queuedOrder()).mockResolvedValueOnce(pendingOrder);
+    generatePixPayment.mockResolvedValueOnce({
+      stripeResult: {
+        checkoutSessionId: 'cs_test_123',
+        paymentMethodId: 'pm_test_123',
+        pix: {
+          data: null,
+          expiresAt: undefined,
+          imageUrlPng: 'https://stripe.test/pix.png',
+          setupIntentId: undefined,
+          setupIntentClientSecret: undefined,
+        },
+      },
+      checkoutUrl: 'https://checkout.stripe.com/c/pay/cs_test_123?redirect_pm_type=pix&ui_mode=custom',
+      profile: { name: 'Cliente Teste' },
+      qrPngBuffer: null,
+    });
+
+    await processPixGenerationJob({ orderId: 'order-1', finalAttempt: false });
+
+    expect(prisma.order.updateMany).toHaveBeenLastCalledWith({
+      where: { id: 'order-1', status: 'CREATING_PAYMENT' },
+      data: expect.objectContaining({
+        status: 'PENDING_PAYMENT',
+        pixCode: null,
+        pixQrPng: null,
+        pixImageUrl: 'https://stripe.test/pix.png',
+      }),
+    });
+    expect(broadcastOrderReady).toHaveBeenCalledWith(pendingOrder);
+  });
+
   it('Stripe 代理池为空时回退 ChatGPT 代理池作为单代理出口', async () => {
     prisma.order.findUnique.mockResolvedValueOnce(queuedOrder()).mockResolvedValueOnce({
       ...queuedOrder(),

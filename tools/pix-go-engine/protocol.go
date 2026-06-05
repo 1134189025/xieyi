@@ -335,12 +335,6 @@ func (s *StripeSession) stripePixConfirm(paymentMethodID string) (map[string]any
 	currency := strVal(initData, "currency")
 	amount, amountPresent := extractAmountFromInit(initData)
 	s.logf("[pix] init: currency=%s amount=%d amount_present=%t init_checksum=%s", currency, amount, amountPresent, truncate(initChecksum, 20))
-	if !amountPresent {
-		return nil, 0, false, currency, &EngineError{Code: "PAYMENT_FAILED", StatusCode: 502, Stage: "stripe_init", Detail: "amount_missing", HTTPStatus: 200}
-	}
-	if amount > 0 {
-		return nil, amount, true, currency, &EngineError{Code: "ACCOUNT_NOT_ELIGIBLE", StatusCode: 400, Stage: "stripe_init", Detail: "amount_nonzero", HTTPStatus: 200}
-	}
 
 	returnURL := checkoutURL(s.csID)
 	form := urlEncode(map[string]string{
@@ -366,16 +360,16 @@ func (s *StripeSession) stripePixConfirm(paymentMethodID string) (map[string]any
 	})
 	status, body, err := s.doReq(s.ext, "POST", "https://api.stripe.com/v1/payment_pages/"+s.csID+"/confirm", form, stripePostHeaders())
 	if err != nil {
-		return nil, amount, true, currency, &EngineError{Code: "PAYMENT_FAILED", StatusCode: 502, Stage: "stripe_confirm", Detail: "transport_error", Cause: err}
+		return nil, amount, amountPresent, currency, &EngineError{Code: "PAYMENT_FAILED", StatusCode: 502, Stage: "stripe_confirm", Detail: "transport_error", Cause: err}
 	}
 	if status != 200 {
-		return nil, amount, true, currency, &EngineError{Code: "PAYMENT_FAILED", StatusCode: 502, Stage: "stripe_confirm", Detail: "http_error", HTTPStatus: status}
+		return nil, amount, amountPresent, currency, &EngineError{Code: "PAYMENT_FAILED", StatusCode: 502, Stage: "stripe_confirm", Detail: "http_error", HTTPStatus: status}
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, amount, true, currency, &EngineError{Code: "PAYMENT_FAILED", StatusCode: 502, Stage: "stripe_confirm", Detail: "invalid_json", HTTPStatus: status}
+		return nil, amount, amountPresent, currency, &EngineError{Code: "PAYMENT_FAILED", StatusCode: 502, Stage: "stripe_confirm", Detail: "invalid_json", HTTPStatus: status}
 	}
-	return payload, amount, true, currency, nil
+	return payload, amount, amountPresent, currency, nil
 }
 
 func (s *StripeSession) stripeInit() (map[string]any, error) {

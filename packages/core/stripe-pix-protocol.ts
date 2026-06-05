@@ -57,9 +57,10 @@ export interface BuildConfirmRequestBodyInput extends StripeAttributionMetadata 
 }
 
 export interface PixQrArtifact {
-  data: string;
+  data: string | null;
   hostedInstructionsUrl?: string;
   imageUrlPng?: string;
+  imageUrlSvg?: string;
   expiresAt?: number;
   setupIntentId?: string;
   setupIntentClientSecret?: string;
