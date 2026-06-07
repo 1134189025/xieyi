@@ -113,11 +113,13 @@ function emitOrderReady(order: Order) {
 
 function emitOrderNew(order: Order) {
   if (!io) return;
+  const paymentHandler = (order as Order & { paymentHandler?: string | null }).paymentHandler ?? 'LOCAL_WORKER';
 
   const summary = {
     id: order.id,
     trackingToken: order.trackingToken,
     status: order.status,
+    paymentHandler,
     pixCode: order.pixCode,
     pixQrPngBase64: order.pixQrPng ? Buffer.from(order.pixQrPng).toString('base64') : null,
     pixExpiresAt: order.pixExpiresAt?.toISOString() ?? null,
@@ -125,7 +127,9 @@ function emitOrderNew(order: Order) {
     createdAt: order.createdAt.toISOString(),
   };
 
-  io.of('/worker').emit('order:new', summary);
+  if (paymentHandler === 'LOCAL_WORKER') {
+    io.of('/worker').emit('order:new', summary);
+  }
   io.of('/admin').emit('order:new', summary);
 }
 

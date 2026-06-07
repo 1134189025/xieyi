@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import type { ReactNode } from 'react';
 import api from '../../api/client';
 import Layout from '../../components/Layout';
 import StatusBadge from '../../components/StatusBadge';
@@ -11,7 +12,11 @@ interface OrderItem {
   id: string;
   trackingToken: string;
   status: string;
+  paymentHandler?: 'LOCAL_WORKER' | 'OUTSOURCED_BUYER_API';
   checkoutSessionId: string | null;
+  outsourcedTicketId?: string | null;
+  outsourcedPaymentStatus?: string | null;
+  outsourcedLastError?: string | null;
   errorMessage: string | null;
   generationErrorCode: string | null;
   generationErrorStage: string | null;
@@ -112,12 +117,14 @@ export default function OrdersPage() {
           <div className="py-10 text-center text-app-secondary">{error}</div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="min-w-[980px] w-full text-sm">
+            <table className="min-w-[1240px] w-full text-sm">
               <thead className="bg-neutral-50">
                 <tr>
                   <th className="px-6 py-3 text-left font-medium text-app-secondary">追踪码</th>
                   <th className="px-6 py-3 text-left font-medium text-app-secondary">状态</th>
+                  <th className="px-6 py-3 text-left font-medium text-app-secondary">处理方式</th>
                   <th className="px-6 py-3 text-left font-medium text-app-secondary">归属工人</th>
+                  <th className="px-6 py-3 text-left font-medium text-app-secondary">外包信息</th>
                   <th className="px-6 py-3 text-left font-medium text-app-secondary">失败诊断</th>
                   <th className="px-6 py-3 text-left font-medium text-app-secondary">创建时间</th>
                   <th className="px-6 py-3 text-left font-medium text-app-secondary">完成时间</th>
@@ -132,7 +139,13 @@ export default function OrdersPage() {
                       <StatusBadge status={order.status} />
                     </td>
                     <td className="px-6 py-3 text-app-secondary">
+                      {paymentHandlerLabel(order.paymentHandler)}
+                    </td>
+                    <td className="px-6 py-3 text-app-secondary">
                       {workerOwnershipLabel(order)}
+                    </td>
+                    <td className="px-6 py-3 text-app-secondary">
+                      {outsourcedPaymentLabel(order)}
                     </td>
                     <td className="px-6 py-3 text-app-secondary">
                       {order.generationErrorStage || order.generationErrorDetail ? (
@@ -196,9 +209,27 @@ function workerName(worker: WorkerRef | null): string | null {
   return worker.displayName ?? worker.username;
 }
 
+function paymentHandlerLabel(handler: OrderItem['paymentHandler']): string {
+  return handler === 'OUTSOURCED_BUYER_API' ? '外包自动支付' : '本地工人扫码';
+}
+
+function outsourcedPaymentLabel(order: OrderItem): ReactNode {
+  if (order.paymentHandler !== 'OUTSOURCED_BUYER_API') return '-';
+  return (
+    <div className="max-w-xs space-y-1">
+      <p className="break-all font-mono text-xs text-app-primary">{order.outsourcedTicketId ?? '未提交票据'}</p>
+      <p className="text-xs">状态：{order.outsourcedPaymentStatus ?? '-'}</p>
+      {order.outsourcedLastError && <p className="break-words text-xs text-amber-700">{order.outsourcedLastError}</p>}
+    </div>
+  );
+}
+
 function workerOwnershipLabel(order: OrderItem): string {
   const completedWorker = workerName(order.completedBy);
   if (completedWorker) return `完成：${completedWorker}`;
+  if (order.paymentHandler === 'OUTSOURCED_BUYER_API' && order.status === 'PAYMENT_COMPLETED') {
+    return '外包自动完成';
+  }
 
   const claimedWorker = workerName(order.claimedBy);
   return claimedWorker ? `领取：${claimedWorker}` : '-';

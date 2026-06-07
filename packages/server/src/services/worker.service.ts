@@ -59,12 +59,13 @@ export async function listWorkerAccountsForManagement() {
         }),
         worker.enabled
           ? prisma.order.count({
-              where: {
-                status: 'PENDING_PAYMENT',
-                claimedById: worker.id,
-                claimExpiresAt: { gt: new Date() },
-              },
-            })
+            where: {
+              status: 'PENDING_PAYMENT',
+              paymentHandler: 'LOCAL_WORKER',
+              claimedById: worker.id,
+              claimExpiresAt: { gt: new Date() },
+            } as never,
+          })
           : Promise.resolve(0),
         prisma.order.findFirst({
           where: { status: 'PAYMENT_COMPLETED', completedById: worker.id },
@@ -143,9 +144,10 @@ async function releaseActiveWorkerClaims(client: Pick<typeof prisma, 'order'>, w
   await client.order.updateMany({
     where: {
       status: 'PENDING_PAYMENT',
+      paymentHandler: 'LOCAL_WORKER',
       claimedById: workerId,
       claimExpiresAt: { gt: new Date() },
-    },
+    } as never,
     data: {
       claimedById: null,
       claimedAt: null,

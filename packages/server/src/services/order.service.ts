@@ -12,6 +12,10 @@ import {
   getPixGenerationQueueSnapshot,
   secondsPerGenerationEstimate,
 } from '../queues/pix-generation.queue.ts';
+import {
+  getPaymentProcessingSetting,
+  type PaymentHandler,
+} from './settings.service.ts';
 
 const SAFE_PAYMENT_ERROR_MESSAGE = '支付创建失败，请稍后重试。';
 const GENERATION_FAILURE_MESSAGES: Record<string, string> = {
@@ -42,6 +46,7 @@ interface CreatingPaymentOrder {
   id: string;
   trackingToken: string;
   status: string;
+  paymentHandler: PaymentHandler;
   redemptionCodeId: string | null;
   pixCode: string | null;
   pixImageUrl: string | null;
@@ -71,6 +76,12 @@ type OrderWithGeneration = Order & {
   generationErrorDetail?: string | null;
   generationErrorHttpStatus?: number | null;
   submittedRedemptionCode?: string | null;
+  paymentHandler?: PaymentHandler | null;
+  outsourcedTicketId?: string | null;
+  outsourcedPaymentStatus?: string | null;
+  outsourcedLastError?: string | null;
+  outsourcedSubmittedAt?: Date | null;
+  outsourcedFinishedAt?: Date | null;
   claimedById?: string | null;
   claimedAt?: Date | null;
   claimExpiresAt?: Date | null;
@@ -96,12 +107,14 @@ export async function createOrder(redemptionCode: string, session: string) {
   if (maintenanceMode.enabled) {
     throw new AppError(503, '系统维护中，请稍后再提交', 'MAINTENANCE_MODE');
   }
+  const paymentProcessing = await getPaymentProcessingSetting();
 
   const order = await createCreatingPaymentOrder({
     redemptionCode,
     reservedAt: new Date(),
     trackingToken: nanoid(12),
     encryptedSession: encrypt(session),
+    paymentHandler: paymentProcessing.handler,
   });
 
   try {
@@ -119,6 +132,7 @@ async function createCreatingPaymentOrder(input: {
   reservedAt: Date;
   trackingToken: string;
   encryptedSession: string;
+  paymentHandler: PaymentHandler;
 }): Promise<CreatingPaymentOrder> {
   try {
     const orderId = randomUUID();
@@ -134,6 +148,7 @@ async function createCreatingPaymentOrder(input: {
           "id",
           "tracking_token",
           "status",
+          "payment_handler",
           "redemption_code_id",
           "encrypted_session_data",
           "generation_queued_at",
@@ -145,6 +160,7 @@ async function createCreatingPaymentOrder(input: {
           ${orderId},
           ${input.trackingToken},
           'CREATING_PAYMENT'::"OrderStatus",
+          ${input.paymentHandler}::"PaymentHandler",
           reserved."id",
           ${input.encryptedSession},
           ${input.reservedAt},
@@ -156,6 +172,7 @@ async function createCreatingPaymentOrder(input: {
           "id",
           "tracking_token",
           "status",
+          "payment_handler",
           "redemption_code_id",
           "pix_code",
           "pix_image_url",
@@ -166,6 +183,7 @@ async function createCreatingPaymentOrder(input: {
         "id",
         "tracking_token" AS "trackingToken",
         "status"::text AS "status",
+        "payment_handler"::text AS "paymentHandler",
         "redemption_code_id" AS "redemptionCodeId",
         "pix_code" AS "pixCode",
         "pix_image_url" AS "pixImageUrl",
@@ -313,17 +331,21 @@ export async function getOrderByTrackingToken(trackingToken: string) {
 }
 
 async function buildPublicOrderView(order: Order) {
+  const generation = order as OrderWithGeneration;
+  const outsourced = generation.paymentHandler === 'OUTSOURCED_BUYER_API';
   return {
     trackingToken: order.trackingToken,
     status: order.status,
-    pixCode: order.pixCode,
-    pixQrPngBase64: order.pixQrPng ? Buffer.from(order.pixQrPng).toString('base64') : null,
-    pixExpiresAt: order.pixExpiresAt?.toISOString() ?? null,
-    pixImageUrl: order.pixImageUrl,
+    paymentHandler: generation.paymentHandler ?? 'LOCAL_WORKER',
+    outsourcedPaymentStatus: generation.outsourcedPaymentStatus ?? null,
+    pixCode: outsourced ? null : order.pixCode,
+    pixQrPngBase64: !outsourced && order.pixQrPng ? Buffer.from(order.pixQrPng).toString('base64') : null,
+    pixExpiresAt: outsourced ? null : order.pixExpiresAt?.toISOString() ?? null,
+    pixImageUrl: outsourced ? null : order.pixImageUrl,
     completedAt: order.completedAt?.toISOString() ?? null,
     createdAt: order.createdAt.toISOString(),
-    errorMessage: order.status === 'FAILED' ? customerFailureMessage((order as OrderWithGeneration).generationErrorCode) : null,
-    queueEstimate: await safeCalculateQueueEstimate(order),
+    errorMessage: order.status === 'FAILED' ? customerFailureMessage(generation.generationErrorCode) : null,
+    queueEstimate: outsourced ? null : await safeCalculateQueueEstimate(order),
   };
 }
 
@@ -336,8 +358,9 @@ export async function getWorkerOrders(page: number, limit: number) {
   const now = new Date();
   const workerQueueWhere: Prisma.OrderWhereInput = {
     status: 'PENDING_PAYMENT',
+    paymentHandler: 'LOCAL_WORKER',
     OR: [{ claimedById: null }, { claimExpiresAt: { lt: now } }],
-  };
+  } as never;
   const [orders, total] = await Promise.all([
     prisma.order.findMany({
       where: workerQueueWhere,
@@ -397,6 +420,7 @@ export async function claimPaymentOrderBatch(workerId: string) {
       SELECT "id"
       FROM "orders"
       WHERE "status" = 'PENDING_PAYMENT'
+        AND "payment_handler" = 'LOCAL_WORKER'
         AND ("claimed_by_id" IS NULL OR "claim_expires_at" < NOW())
       ORDER BY "created_at" ASC, "id" ASC
       FOR UPDATE SKIP LOCKED
@@ -449,9 +473,10 @@ export async function claimPaymentOrderBatch(workerId: string) {
 export async function getWorkerClaimedOrders(workerId: string, page: number, limit: number) {
   const where: Prisma.OrderWhereInput = {
     status: 'PENDING_PAYMENT',
+    paymentHandler: 'LOCAL_WORKER',
     claimedById: workerId,
     claimExpiresAt: { gt: new Date() },
-  };
+  } as never;
   const [orders, total] = await Promise.all([
     prisma.order.findMany({
       where,
@@ -477,9 +502,10 @@ export async function renewClaimedPaymentOrder(orderId: string, workerId: string
     where: {
       id: orderId,
       status: 'PENDING_PAYMENT',
+      paymentHandler: 'LOCAL_WORKER',
       claimedById: workerId,
       claimExpiresAt: { gt: now },
-    },
+    } as never,
     data: { claimExpiresAt },
   });
   if (changed.count === 0) throw new AppError(409, 'Order is not claimed by current worker');
@@ -489,7 +515,12 @@ export async function renewClaimedPaymentOrder(orderId: string, workerId: string
 
 export async function releaseClaimedPaymentOrder(orderId: string, workerId: string) {
   const changed = await prisma.order.updateMany({
-    where: { id: orderId, status: 'PENDING_PAYMENT', claimedById: workerId },
+    where: {
+      id: orderId,
+      status: 'PENDING_PAYMENT',
+      paymentHandler: 'LOCAL_WORKER',
+      claimedById: workerId,
+    } as never,
     data: { claimedById: null, claimedAt: null, claimExpiresAt: null },
   });
   if (changed.count === 0) throw new AppError(409, 'Order is not claimed by current worker');
@@ -507,13 +538,14 @@ async function calculateQueueEstimate(order: Order): Promise<QueueEstimate | nul
     prisma.order.count({
       where: {
         status: 'PENDING_PAYMENT',
+        paymentHandler: 'LOCAL_WORKER',
         OR: [
           { createdAt: { lt: order.createdAt } },
           { createdAt: order.createdAt, id: { lt: order.id } },
         ],
-      },
+      } as never,
     }),
-    prisma.order.count({ where: { status: 'PENDING_PAYMENT' } }),
+    prisma.order.count({ where: { status: 'PENDING_PAYMENT', paymentHandler: 'LOCAL_WORKER' } as never }),
     resolveQueueCadence(),
   ]);
 
@@ -552,11 +584,12 @@ async function countCreatingPaymentOrdersAhead(order: Order): Promise<number> {
   return prisma.order.count({
     where: {
       status: 'CREATING_PAYMENT',
+      paymentHandler: 'LOCAL_WORKER',
       OR: [
         { createdAt: { lt: order.createdAt } },
         { createdAt: order.createdAt, id: { lt: order.id } },
       ],
-    },
+    } as never,
   });
 }
 
@@ -648,9 +681,10 @@ export async function completeClaimedPaymentOrder(orderId: string, workerId: str
     where: {
       id: orderId,
       status: 'PENDING_PAYMENT',
+      paymentHandler: 'LOCAL_WORKER',
       claimedById: workerId,
       claimExpiresAt: { gt: completedAt },
-    },
+    } as never,
     data: {
       status: 'PAYMENT_COMPLETED',
       completedAt,
@@ -707,15 +741,17 @@ export async function getWorkerSummary(workerId: string) {
     prisma.order.count({
       where: {
         status: 'PENDING_PAYMENT',
+        paymentHandler: 'LOCAL_WORKER',
         claimedById: workerId,
         claimExpiresAt: { gt: now },
-      },
+      } as never,
     }),
     prisma.order.count({
       where: {
         status: 'PENDING_PAYMENT',
+        paymentHandler: 'LOCAL_WORKER',
         OR: [{ claimedById: null }, { claimExpiresAt: { lt: now } }],
-      },
+      } as never,
     }),
   ]);
 
@@ -751,7 +787,11 @@ export async function getAdminOrders(filters: {
       id: order.id,
       trackingToken: order.trackingToken,
       status: order.status,
+      paymentHandler: (order as OrderWithGeneration).paymentHandler ?? 'LOCAL_WORKER',
       checkoutSessionId: order.checkoutSessionId,
+      outsourcedTicketId: (order as OrderWithGeneration).outsourcedTicketId ?? null,
+      outsourcedPaymentStatus: (order as OrderWithGeneration).outsourcedPaymentStatus ?? null,
+      outsourcedLastError: (order as OrderWithGeneration).outsourcedLastError ?? null,
       errorMessage: order.errorMessage,
       generationErrorCode: order.generationErrorCode,
       generationErrorStage: (order as OrderWithGeneration).generationErrorStage ?? null,
@@ -794,13 +834,85 @@ export async function cancelOrder(orderId: string) {
   return { id: updated.id, status: updated.status };
 }
 
+export async function completeOutsourcedPaymentOrder(orderId: string, outsourcedPaymentStatus: string) {
+  const completedAt = new Date();
+  const changed = await prisma.order.updateMany({
+    where: {
+      id: orderId,
+      status: 'PENDING_PAYMENT',
+      paymentHandler: 'OUTSOURCED_BUYER_API',
+      outsourcedTicketId: { not: null },
+    } as never,
+    data: {
+      status: 'PAYMENT_COMPLETED',
+      completedAt,
+      completedById: null,
+      outsourcedPaymentStatus,
+      outsourcedFinishedAt: completedAt,
+      updatedAt: new Date(),
+    } as never,
+  });
+  if (changed.count === 0) return false;
+
+  const updated = await prisma.order.findUnique({ where: { id: orderId } });
+  if (updated) broadcastOrderStatusChange(updated);
+  return true;
+}
+
+export async function failOutsourcedPaymentOrder(
+  orderId: string,
+  outsourcedPaymentStatus: string,
+  outsourcedLastError: string | null,
+) {
+  const failedAt = new Date();
+  const safeFailureMessage = customerFailureMessage('PAYMENT_FAILED');
+  const safeDetail = sanitizeDiagnosticDetail(outsourcedLastError);
+  await prisma.$executeRaw`
+    WITH target AS (
+      SELECT "redemption_code_id"
+      FROM "orders"
+      WHERE "id" = ${orderId}
+        AND "status" = 'PENDING_PAYMENT'
+        AND "payment_handler" = 'OUTSOURCED_BUYER_API'
+    ),
+    failed AS (
+      UPDATE "orders"
+      SET
+        "status" = 'FAILED',
+        "generation_finished_at" = ${failedAt},
+        "generation_error_code" = 'PAYMENT_FAILED',
+        "generation_error_stage" = 'outsourced_status',
+        "generation_error_detail" = ${safeDetail},
+        "error_message" = ${safeFailureMessage},
+        "outsourced_payment_status" = ${outsourcedPaymentStatus},
+        "outsourced_last_error" = ${safeDetail},
+        "outsourced_finished_at" = ${failedAt},
+        "redemption_code_id" = NULL,
+        "updated_at" = NOW()
+      FROM target
+      WHERE "orders"."id" = ${orderId}
+        AND "orders"."status" = 'PENDING_PAYMENT'
+        AND "orders"."payment_handler" = 'OUTSOURCED_BUYER_API'
+      RETURNING target."redemption_code_id"
+    )
+    UPDATE "redemption_codes"
+    SET "used_at" = NULL
+    FROM failed
+    WHERE "redemption_codes"."id" = failed."redemption_code_id"
+  `;
+
+  const updated = await prisma.order.findUnique({ where: { id: orderId } });
+  if (updated) broadcastOrderStatusChange(updated);
+}
+
 export async function expirePendingOrders() {
   const now = new Date();
   const expired = await prisma.order.updateMany({
     where: {
       status: 'PENDING_PAYMENT',
+      paymentHandler: 'LOCAL_WORKER',
       pixExpiresAt: { lt: now },
-    },
+    } as never,
     data: { status: 'EXPIRED' },
   });
 
@@ -820,6 +932,7 @@ function toOrderLike(order: CreatingPaymentOrder): Order {
     id: order.id,
     trackingToken: order.trackingToken,
     status: order.status,
+    paymentHandler: order.paymentHandler,
     redemptionCodeId: order.redemptionCodeId,
     checkoutSessionId: null,
     checkoutUrl: null,
@@ -845,6 +958,11 @@ function toOrderLike(order: CreatingPaymentOrder): Order {
     generationErrorDetail: null,
     generationErrorHttpStatus: null,
     submittedRedemptionCode: null,
+    outsourcedTicketId: null,
+    outsourcedPaymentStatus: null,
+    outsourcedLastError: null,
+    outsourcedSubmittedAt: null,
+    outsourcedFinishedAt: null,
     claimedById: null,
     claimedAt: null,
     claimExpiresAt: null,

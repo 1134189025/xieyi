@@ -69,6 +69,12 @@ export const updateMaintenanceModeSettingSchema = z.object({
   enabled: z.boolean(),
 });
 
+export const updatePaymentProcessingSettingSchema = z.object({
+  handler: z.enum(['LOCAL_WORKER', 'OUTSOURCED_BUYER_API']),
+  outsourcedBuyerApiBaseUrl: z.string().max(500).trim().nullable().optional(),
+  outsourcedActivationCodePool: z.string().max(20000).trim().nullable().optional(),
+});
+
 export const listOrdersQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(50),

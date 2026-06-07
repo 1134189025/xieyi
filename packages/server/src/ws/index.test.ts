@@ -61,6 +61,7 @@ function pendingOrder() {
     id: 'order-1',
     trackingToken: 'track-1',
     status: 'PENDING_PAYMENT',
+    paymentHandler: 'LOCAL_WORKER',
     pixCode: 'pix-code',
     pixQrPng: Buffer.from('png'),
     pixExpiresAt: new Date('2026-06-01T01:00:00.000Z'),
@@ -124,6 +125,33 @@ describe('ws order realtime bridge', () => {
       }),
     );
     expect(workerNamespace?.emit).not.toHaveBeenCalledWith('order:completed', expect.anything());
+  });
+
+  it('does not forward outsourced order_ready events to local workers', async () => {
+    const { setupWebSocket } = await loadWsModule();
+    prisma.order.findUnique.mockResolvedValue({
+      ...pendingOrder(),
+      paymentHandler: 'OUTSOURCED_BUYER_API',
+      pixCode: null,
+      pixQrPng: null,
+      pixImageUrl: null,
+    });
+
+    setupWebSocket({} as never);
+    const handler = realtimeMock.subscribeOrderRealtimeEvents.mock.calls[0]?.[0];
+    await handler({ type: 'order_ready', orderId: 'order-1' });
+
+    const workerNamespace = socketIoMock.namespaces.get('/worker');
+    const adminNamespace = socketIoMock.namespaces.get('/admin');
+
+    expect(workerNamespace?.emit).not.toHaveBeenCalledWith('order:new', expect.anything());
+    expect(adminNamespace?.emit).toHaveBeenCalledWith(
+      'order:new',
+      expect.objectContaining({
+        id: 'order-1',
+        paymentHandler: 'OUTSOURCED_BUYER_API',
+      }),
+    );
   });
 
   it('publishes status changes when a worker process cannot emit locally', async () => {

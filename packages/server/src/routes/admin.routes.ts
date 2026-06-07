@@ -19,9 +19,11 @@ import { getDashboardStats } from '../services/dashboard.service.ts';
 import {
   getAutoPaymentDetectionSetting,
   getMaintenanceModeSetting,
+  getPaymentProcessingSetting,
   getProxySetting,
   updateAutoPaymentDetectionSetting,
   updateMaintenanceModeSetting,
+  updatePaymentProcessingSetting,
   updateProxySetting,
 } from '../services/settings.service.ts';
 import {
@@ -33,6 +35,7 @@ import {
   updateOrderSchema,
   updateAutoPaymentDetectionSettingSchema,
   updateMaintenanceModeSettingSchema,
+  updatePaymentProcessingSettingSchema,
   updateProxySettingSchema,
   listOrdersQuerySchema,
 } from '../utils/validators.ts';
@@ -214,6 +217,25 @@ router.put('/settings/maintenance-mode', async (req, res, next) => {
     if (!parsed.success) throw new AppError(400, 'Invalid input');
 
     res.json(await updateMaintenanceModeSetting(parsed.data.enabled));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/settings/payment-processing', async (_req, res, next) => {
+  try {
+    res.json(await getPaymentProcessingSetting());
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.put('/settings/payment-processing', async (req, res, next) => {
+  try {
+    const parsed = updatePaymentProcessingSettingSchema.safeParse(req.body);
+    if (!parsed.success) throw new AppError(400, 'Invalid input');
+
+    res.json(await updatePaymentProcessingSetting(parsed.data));
   } catch (error) {
     next(error);
   }

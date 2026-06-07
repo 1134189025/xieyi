@@ -18,6 +18,8 @@ vi.mock('../utils/crypto.ts', () => ({ encrypt, decrypt }));
 const {
   getAutoPaymentDetectionSetting,
   getMaintenanceModeSetting,
+  getPaymentProcessingConfig,
+  getPaymentProcessingSetting,
   getProxySetting,
   normalizeProxyInput,
   normalizeProxyPoolInput,
@@ -27,6 +29,7 @@ const {
   shouldCountProxyFailure,
   updateAutoPaymentDetectionSetting,
   updateMaintenanceModeSetting,
+  updatePaymentProcessingSetting,
   updateProxySetting,
 } = await import('./settings.service.ts');
 
@@ -181,5 +184,85 @@ describe('settings.service', () => {
 
     prisma.systemSetting.upsert.mockResolvedValue({});
     await expect(updateAutoPaymentDetectionSetting(false)).resolves.toEqual({ enabled: false });
+  });
+
+  it('saves outsourced payment processing settings with encrypted activation codes and safe previews', async () => {
+    prisma.systemSetting.upsert.mockResolvedValue({});
+    prisma.systemSetting.findUnique.mockImplementation(({ where }: { where: { key: string } }) => {
+      if (where.key === 'payment_processing_handler') {
+        return Promise.resolve({ key: where.key, value: 'OUTSOURCED_BUYER_API' });
+      }
+      if (where.key === 'outsourced_buyer_api_base_url') {
+        return Promise.resolve({ key: where.key, value: 'https://scan.amazo.indevs.in' });
+      }
+      if (where.key === 'outsourced_activation_code_pool') {
+        return Promise.resolve({
+          key: where.key,
+          value: 'encrypted:DP-FIRST-CODE\nencrypted:DP-SECOND-CODE',
+        });
+      }
+      return Promise.resolve(null);
+    });
+
+    await expect(updatePaymentProcessingSetting({
+      handler: 'OUTSOURCED_BUYER_API',
+      outsourcedBuyerApiBaseUrl: 'https://scan.amazo.indevs.in/buyer/',
+      outsourcedActivationCodePool: 'DP-FIRST-CODE\nDP-SECOND-CODE',
+    })).resolves.toEqual({
+      handler: 'OUTSOURCED_BUYER_API',
+      outsourcedBuyerApiBaseUrl: 'https://scan.amazo.indevs.in',
+      outsourcedActivationCodeCount: 2,
+      outsourcedActivationCodePreview: ['DP-F...ODE', 'DP-S...ODE'],
+    });
+
+    expect(encrypt).toHaveBeenCalledWith('DP-FIRST-CODE');
+    expect(encrypt).toHaveBeenCalledWith('DP-SECOND-CODE');
+    expect(JSON.stringify(await getPaymentProcessingSetting())).not.toContain('DP-FIRST-CODE');
+    await expect(getPaymentProcessingConfig()).resolves.toEqual({
+      handler: 'OUTSOURCED_BUYER_API',
+      outsourcedBuyerApiBaseUrl: 'https://scan.amazo.indevs.in',
+      outsourcedActivationCodes: ['DP-FIRST-CODE', 'DP-SECOND-CODE'],
+    });
+  });
+
+  it('keeps outsourced activation code pool when admin saves handler without a pool field', async () => {
+    prisma.systemSetting.upsert.mockResolvedValue({});
+    prisma.systemSetting.findUnique.mockImplementation(({ where }: { where: { key: string } }) => {
+      if (where.key === 'payment_processing_handler') {
+        return Promise.resolve({ key: where.key, value: 'OUTSOURCED_BUYER_API' });
+      }
+      if (where.key === 'outsourced_buyer_api_base_url') {
+        return Promise.resolve({ key: where.key, value: 'https://scan.amazo.indevs.in' });
+      }
+      if (where.key === 'outsourced_activation_code_pool') {
+        return Promise.resolve({ key: where.key, value: 'encrypted:DP-FIRST-CODE' });
+      }
+      return Promise.resolve(null);
+    });
+
+    await expect(updatePaymentProcessingSetting({
+      handler: 'LOCAL_WORKER',
+      outsourcedBuyerApiBaseUrl: 'https://scan.amazo.indevs.in',
+    })).resolves.toEqual({
+      handler: 'LOCAL_WORKER',
+      outsourcedBuyerApiBaseUrl: 'https://scan.amazo.indevs.in',
+      outsourcedActivationCodeCount: 1,
+      outsourcedActivationCodePreview: ['DP-F...ODE'],
+    });
+
+    expect(prisma.systemSetting.deleteMany).not.toHaveBeenCalledWith({
+      where: { key: 'outsourced_activation_code_pool' },
+    });
+  });
+
+  it('defaults payment processing to local worker mode', async () => {
+    prisma.systemSetting.findUnique.mockResolvedValue(null);
+
+    await expect(getPaymentProcessingSetting()).resolves.toEqual({
+      handler: 'LOCAL_WORKER',
+      outsourcedBuyerApiBaseUrl: 'https://scan.amazo.indevs.in',
+      outsourcedActivationCodeCount: 0,
+      outsourcedActivationCodePreview: [],
+    });
   });
 });

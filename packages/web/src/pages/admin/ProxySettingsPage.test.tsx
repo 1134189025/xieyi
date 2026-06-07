@@ -39,11 +39,21 @@ function proxySettingsResponse() {
   };
 }
 
+function paymentProcessingResponse() {
+  return {
+    handler: 'LOCAL_WORKER',
+    outsourcedBuyerApiBaseUrl: 'https://scan.amazo.indevs.in',
+    outsourcedActivationCodeCount: 2,
+    outsourcedActivationCodePreview: ['DP-F...ODE', 'DP-S...ODE'],
+  };
+}
+
 function mockSettingsResponse() {
   (api.get as Mock)
     .mockResolvedValueOnce({ data: proxySettingsResponse() })
     .mockResolvedValueOnce({ data: { enabled: true } })
-    .mockResolvedValueOnce({ data: { enabled: false } });
+    .mockResolvedValueOnce({ data: { enabled: false } })
+    .mockResolvedValueOnce({ data: paymentProcessingResponse() });
 }
 
 async function renderSettingsPage() {
@@ -82,8 +92,12 @@ describe('ProxySettingsPage', () => {
     expect(api.get).toHaveBeenCalledWith('/admin/settings/proxy');
     expect(api.get).toHaveBeenCalledWith('/admin/settings/auto-payment-detection');
     expect(api.get).toHaveBeenCalledWith('/admin/settings/maintenance-mode');
+    expect(api.get).toHaveBeenCalledWith('/admin/settings/payment-processing');
     expect(container.textContent).toContain('ChatGPT 代理池');
     expect(container.textContent).toContain('Stripe 代理池');
+    expect(container.textContent).toContain('付款处理方式');
+    expect(container.textContent).toContain('本地工人扫码');
+    expect(container.textContent).toContain('DP-F...ODE');
     expect(container.textContent).toContain('维护模式');
     expect(container.textContent).toContain('http://chat-user:****@chat.example:10000');
     expect(container.textContent).not.toContain('chat-pass');
@@ -130,6 +144,52 @@ describe('ProxySettingsPage', () => {
     expect(api.put).toHaveBeenCalledWith('/admin/settings/maintenance-mode', { enabled: true });
   });
 
+  it('saves outsourced payment processing settings without exposing full activation codes', async () => {
+    mockSettingsResponse();
+    (api.put as Mock).mockResolvedValueOnce({
+      data: {
+        handler: 'OUTSOURCED_BUYER_API',
+        outsourcedBuyerApiBaseUrl: 'https://scan.amazo.indevs.in',
+        outsourcedActivationCodeCount: 2,
+        outsourcedActivationCodePreview: ['DP-F...ODE', 'DP-S...ODE'],
+      },
+    });
+
+    const { container, root } = await renderSettingsPage();
+    mountedRoot = root;
+
+    const outsourcedButton = Array.from(container.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('外包自动支付'),
+    );
+    const apiBaseUrlInput = container.querySelector<HTMLInputElement>('input[placeholder="https://scan.amazo.indevs.in"]');
+    const textareas = container.querySelectorAll<HTMLTextAreaElement>('textarea');
+
+    await act(async () => {
+      outsourcedButton!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      setInputValue(apiBaseUrlInput!, 'https://scan.amazo.indevs.in/buyer/');
+      apiBaseUrlInput!.dispatchEvent(new Event('input', { bubbles: true }));
+      setTextareaValue(textareas[2], 'DP-FIRST-CODE\nDP-SECOND-CODE');
+      textareas[2].dispatchEvent(new Event('input', { bubbles: true }));
+    });
+
+    const saveButton = Array.from(container.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('保存付款处理方式'),
+    );
+    await act(async () => {
+      saveButton!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    expect(api.put).toHaveBeenCalledWith('/admin/settings/payment-processing', {
+      handler: 'OUTSOURCED_BUYER_API',
+      outsourcedBuyerApiBaseUrl: 'https://scan.amazo.indevs.in/buyer/',
+      outsourcedActivationCodePool: 'DP-FIRST-CODE\nDP-SECOND-CODE',
+    });
+    expect(container.textContent).toContain('外包自动支付');
+    expect(container.textContent).toContain('DP-F...ODE');
+    expect(container.textContent).not.toContain('DP-FIRST-CODE');
+  });
+
   it('refreshes settings every 10 seconds without clearing edited proxy textareas', async () => {
     vi.useFakeTimers();
     mockSettingsResponse();
@@ -161,7 +221,15 @@ describe('ProxySettingsPage', () => {
         },
       })
       .mockResolvedValueOnce({ data: { enabled: false } })
-      .mockResolvedValueOnce({ data: { enabled: true } });
+      .mockResolvedValueOnce({ data: { enabled: true } })
+      .mockResolvedValueOnce({
+        data: {
+          handler: 'OUTSOURCED_BUYER_API',
+          outsourcedBuyerApiBaseUrl: 'https://scan.amazo.indevs.in',
+          outsourcedActivationCodeCount: 1,
+          outsourcedActivationCodePreview: ['DP-N...ODE'],
+        },
+      });
 
     const { container, root } = await renderSettingsPage();
     mountedRoot = root;
@@ -180,9 +248,10 @@ describe('ProxySettingsPage', () => {
       await Promise.resolve();
     });
 
-    expect(api.get).toHaveBeenCalledTimes(6);
+    expect(api.get).toHaveBeenCalledTimes(8);
     expect(textareas[0].value).toBe('chat.example:10000:chat-user:chat-pass');
     expect(textareas[1].value).toBe('stripe.example:10001:stripe-user:stripe-pass');
+    expect(textareas[2].value).toBe('');
     expect(container.textContent).toContain('http://chat-user:****@chat2.example:10002');
   });
 });
@@ -190,4 +259,9 @@ describe('ProxySettingsPage', () => {
 function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
   const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
   setter?.call(textarea, value);
+}
+
+function setInputValue(input: HTMLInputElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+  setter?.call(input, value);
 }

@@ -1,6 +1,6 @@
 # API 接口文档
 
-更新时间：2026-06-02
+更新时间：2026-06-07
 
 本文档基于当前项目源码整理，服务端入口为 `packages/server/src/index.ts`，路由集中在 `packages/server/src/routes`，实时通知在 `packages/server/src/ws/index.ts`。
 
@@ -65,6 +65,26 @@
 | 未登录 | 健康检查、登录、创建订单、查询自己的追踪订单 |
 | `WORKER` | Worker 订单队列、完成订单、Worker 实时通知 |
 | `ADMIN` | 所有 Worker 接口、管理端订单、兑换码、工人账号、系统设置、管理端实时通知 |
+
+### 1.4 付款处理方式
+
+订单创建时会固化当前后台付款处理方式，之后后台切换不会影响已创建订单。
+
+| 值 | 含义 | 说明 |
+| --- | --- | --- |
+| `LOCAL_WORKER` | 本地工人扫码 | Pix 生成后进入本地 Worker 队列，由工人领取并扫码完成 |
+| `OUTSOURCED_BUYER_API` | 外包自动支付 | Pix 生成后提交到外包买家端 API，外包失败不会回退本地工人 |
+
+外包模式说明：
+
+| 项目 | 说明 |
+| --- | --- |
+| 外包凭证来源 | 后台“外包激活码池”，客户仍只提交本地兑换码和 ChatGPT session/accessToken |
+| 外包 Base URL 默认值 | `https://scan.amazo.indevs.in` |
+| 外包处理中 | 本地订单保持 `PENDING_PAYMENT`，公开追踪页不展示 Pix 二维码、Pix 码或本地工人排队信息 |
+| 外包成功 | 外包状态 `paid` 映射为本地 `PAYMENT_COMPLETED`，`completedBy` 为空 |
+| 外包失败 | 外包状态 `failed`、`expired`、`canceled` 映射为本地 `FAILED`，并释放本地兑换码 |
+| 本地 Worker 队列 | 只包含 `paymentHandler=LOCAL_WORKER` 的 `PENDING_PAYMENT` 订单 |
 
 ## 2. 健康检查
 
@@ -195,6 +215,8 @@ curl -X POST http://localhost:3000/api/orders \
 {
   "trackingToken": "tracking-token",
   "status": "CREATING_PAYMENT",
+  "paymentHandler": "LOCAL_WORKER",
+  "outsourcedPaymentStatus": null,
   "pixCode": null,
   "pixQrPngBase64": null,
   "pixExpiresAt": null,
@@ -252,6 +274,8 @@ curl http://localhost:3000/api/orders/track/tracking-token
 {
   "trackingToken": "tracking-token",
   "status": "PENDING_PAYMENT",
+  "paymentHandler": "LOCAL_WORKER",
+  "outsourcedPaymentStatus": null,
   "pixCode": "000201...",
   "pixQrPngBase64": "base64-png",
   "pixExpiresAt": "2026-06-02T00:30:00.000Z",
@@ -268,6 +292,25 @@ curl http://localhost:3000/api/orders/track/tracking-token
     "calculationSource": "default",
     "calculatedAt": "2026-06-02T00:00:05.000Z"
   }
+}
+```
+
+外包处理中响应示例：
+
+```json
+{
+  "trackingToken": "tracking-token",
+  "status": "PENDING_PAYMENT",
+  "paymentHandler": "OUTSOURCED_BUYER_API",
+  "outsourcedPaymentStatus": "authorizing",
+  "pixCode": null,
+  "pixQrPngBase64": null,
+  "pixExpiresAt": null,
+  "pixImageUrl": null,
+  "completedAt": null,
+  "createdAt": "2026-06-07T00:00:00.000Z",
+  "errorMessage": null,
+  "queueEstimate": null
 }
 ```
 
@@ -322,6 +365,8 @@ curl "http://localhost:3000/api/worker/orders?page=1&limit=50" \
   "limit": 50
 }
 ```
+
+说明：该接口只返回本地工人扫码订单，不返回外包自动支付订单。
 
 ### GET `/api/worker/summary`
 
@@ -394,7 +439,7 @@ curl -X POST http://localhost:3000/api/worker/orders/claim-batch \
 }
 ```
 
-说明：返回 `claimedCount=0` 表示当前没有可领取订单。批量领取只处理 `PENDING_PAYMENT` 且未被有效领取或领取已过期的订单。
+说明：返回 `claimedCount=0` 表示当前没有可领取订单。批量领取只处理 `paymentHandler=LOCAL_WORKER`、`PENDING_PAYMENT` 且未被有效领取或领取已过期的订单；外包自动支付订单不会进入 Worker 领取队列。
 
 ### POST `/api/worker/orders/:orderId/complete`
 
@@ -654,9 +699,18 @@ curl -X POST http://localhost:3000/api/admin/redemption-codes \
       "id": "order-id",
       "trackingToken": "tracking-token",
       "status": "PENDING_PAYMENT",
-      "pixCode": "000201...",
+      "paymentHandler": "OUTSOURCED_BUYER_API",
       "checkoutSessionId": "checkout-session-id",
+      "outsourcedTicketId": "Toutsource123",
+      "outsourcedPaymentStatus": "authorizing",
+      "outsourcedLastError": null,
       "errorMessage": null,
+      "generationErrorCode": null,
+      "generationErrorStage": null,
+      "generationErrorDetail": null,
+      "generationErrorHttpStatus": null,
+      "claimedBy": null,
+      "completedBy": null,
       "completedAt": null,
       "createdAt": "2026-06-02T00:00:00.000Z"
     }
@@ -666,6 +720,16 @@ curl -X POST http://localhost:3000/api/admin/redemption-codes \
   "limit": 50
 }
 ```
+
+字段说明：
+
+| 字段 | 说明 |
+| --- | --- |
+| `paymentHandler` | 本单创建时固化的付款处理方式 |
+| `outsourcedTicketId` | 外包买家端 API 返回的票据 ID，本地模式为 `null` |
+| `outsourcedPaymentStatus` | 外包票据状态，例如 `queued`、`authorizing`、`paid`、`failed` |
+| `outsourcedLastError` | 外包终态失败时保存的脱敏错误信息 |
+| `completedBy` | 本地工人完成时有值；外包自动完成时通常为 `null` |
 
 #### PATCH `/api/admin/orders/:id`
 
@@ -812,6 +876,46 @@ curl -X PUT http://localhost:3000/api/admin/settings/proxy \
   -H "Authorization: Bearer <token>" \
   -d "{\"chatGptProxyPool\":\"127.0.0.1:7890:user:pass\",\"stripeProxyPool\":null}"
 ```
+
+#### GET `/api/admin/settings/payment-processing`
+
+查询付款处理方式和外包配置。
+
+成功响应：
+
+```json
+{
+  "handler": "OUTSOURCED_BUYER_API",
+  "outsourcedBuyerApiBaseUrl": "https://scan.amazo.indevs.in",
+  "outsourcedActivationCodeCount": 2,
+  "outsourcedActivationCodePreview": ["DP-F...ODE", "DP-S...ODE"]
+}
+```
+
+说明：接口不会返回完整外包激活码，只返回数量和脱敏预览。
+
+#### PUT `/api/admin/settings/payment-processing`
+
+更新付款处理方式和外包配置。
+
+请求体：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `handler` | string | 是 | `LOCAL_WORKER` 或 `OUTSOURCED_BUYER_API` |
+| `outsourcedBuyerApiBaseUrl` | string/null | 否 | 外包 API 根地址，必须是 http/https；填写 `/buyer` 会自动规整到站点根地址 |
+| `outsourcedActivationCodePool` | string/null | 否 | 外包激活码池，多行文本，每行一个激活码；省略该字段表示保留已保存码池，`null` 或空字符串表示清空 |
+
+请求示例：
+
+```bash
+curl -X PUT http://localhost:3000/api/admin/settings/payment-processing \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
+  -d "{\"handler\":\"OUTSOURCED_BUYER_API\",\"outsourcedBuyerApiBaseUrl\":\"https://scan.amazo.indevs.in\",\"outsourcedActivationCodePool\":\"DP-FIRST-CODE\\nDP-SECOND-CODE\"}"
+```
+
+成功响应同查询接口。外包激活码会加密保存，响应仍只返回数量和脱敏预览。
 
 #### GET `/api/admin/settings/maintenance-mode`
 
@@ -962,7 +1066,7 @@ socket.on('order:completed', (payload) => {
 
 | 事件 | 说明 |
 | --- | --- |
-| `order:new` | 新订单支付信息已准备好，可进入 Worker 队列 |
+| `order:new` | 新本地工人扫码订单支付信息已准备好，可进入 Worker 队列；外包自动支付订单不会推送该事件 |
 | `order:completed` | 订单状态变为完成或状态变化通知 |
 
 `order:new` 负载：
@@ -972,6 +1076,7 @@ socket.on('order:completed', (payload) => {
   "id": "order-id",
   "trackingToken": "tracking-token",
   "status": "PENDING_PAYMENT",
+  "paymentHandler": "LOCAL_WORKER",
   "pixCode": "000201...",
   "pixQrPngBase64": "base64-png",
   "pixExpiresAt": "2026-06-02T00:30:00.000Z",
@@ -1013,7 +1118,7 @@ socket.on('order:completed', (payload) => {
 | 1 | 准备任务 | 本地任务表 | 每条任务有 `redemptionCode` 和 `session` | 数据缺失或重复 |
 | 2 | 限速提交兑换 | `POST /api/orders` | 返回 `202` 和 `trackingToken` | `INVALID_CODE`、`CODE_USED`、`429`、`502`、`503` |
 | 3 | 保存追踪信息 | 本地任务表 | 保存 `trackingToken` 和当前状态 | 保存失败 |
-| 4 | 等待支付生成 | `GET /api/orders/track/:trackingToken` 或 `/worker` Socket | 状态变为 `PENDING_PAYMENT` | 状态变为 `FAILED/EXPIRED/CANCELLED` |
+| 4 | 等待支付生成 | `GET /api/orders/track/:trackingToken`；本地工人模式也可监听 `/worker` Socket | 状态变为 `PENDING_PAYMENT` | 状态变为 `FAILED/EXPIRED/CANCELLED` |
 | 5 | 等待支付完成 | `/orders`、`/worker` 或 `/admin` Socket | 状态变为 `PAYMENT_COMPLETED` | 状态变为 `FAILED/EXPIRED/CANCELLED` |
 | 6 | 兜底确认 | `GET /api/orders/track/:trackingToken` | 查到最终状态 | 长时间无变化，按业务超时处理 |
 
@@ -1038,7 +1143,8 @@ socket.on('order:completed', (payload) => {
 | --- | --- |
 | `POST /api/orders` 返回 `202` | 只表示兑换任务提交成功，不代表最终支付成功 |
 | 查询到 `CREATING_PAYMENT` | 支付还在生成中 |
-| 查询到 `PENDING_PAYMENT` | 支付信息已生成，等待支付 |
+| 查询到 `PENDING_PAYMENT` 且 `paymentHandler=LOCAL_WORKER` | 支付信息已生成，等待本地工人扫码 |
+| 查询到 `PENDING_PAYMENT` 且 `paymentHandler=OUTSOURCED_BUYER_API` | Pix 已提交外包自动支付，等待外包票据终态 |
 | 查询到 `PAYMENT_COMPLETED` | 最终成功 |
 | 查询到 `FAILED` | 最终失败 |
 | 查询到 `EXPIRED` | 最终失败或过期 |

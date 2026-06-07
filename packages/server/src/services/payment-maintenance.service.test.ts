@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const detectCompletedPixPayments = vi.fn();
+const detectOutsourcedPixPayments = vi.fn();
 const expirePendingOrders = vi.fn();
 
 vi.mock('./payment-status.service.ts', () => ({ detectCompletedPixPayments }));
+vi.mock('./outsourced-payment.service.ts', () => ({ detectOutsourcedPixPayments }));
 vi.mock('./order.service.ts', () => ({ expirePendingOrders }));
 
 const { PAYMENT_MAINTENANCE_INTERVAL_MS, startPaymentMaintenanceLoop } = await import('./payment-maintenance.service.ts');
@@ -13,6 +15,7 @@ describe('payment-maintenance.service', () => {
     vi.clearAllMocks();
     vi.useFakeTimers();
     detectCompletedPixPayments.mockResolvedValue({ checked: 0, completed: 0, disabled: false, skipped: false });
+    detectOutsourcedPixPayments.mockResolvedValue({ checked: 0, completed: 0, failed: 0 });
     expirePendingOrders.mockResolvedValue(undefined);
   });
 
@@ -29,9 +32,13 @@ describe('payment-maintenance.service', () => {
     await actTimer(PAYMENT_MAINTENANCE_INTERVAL_MS);
 
     expect(detectCompletedPixPayments).toHaveBeenCalledTimes(1);
+    expect(detectOutsourcedPixPayments).toHaveBeenCalledTimes(1);
     expect(expirePendingOrders).toHaveBeenCalledTimes(1);
-    expect(expirePendingOrders.mock.invocationCallOrder[0]).toBeGreaterThan(
+    expect(detectOutsourcedPixPayments.mock.invocationCallOrder[0]).toBeGreaterThan(
       detectCompletedPixPayments.mock.invocationCallOrder[0],
+    );
+    expect(expirePendingOrders.mock.invocationCallOrder[0]).toBeGreaterThan(
+      detectOutsourcedPixPayments.mock.invocationCallOrder[0],
     );
 
     clearInterval(interval);

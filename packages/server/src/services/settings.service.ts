@@ -7,10 +7,15 @@ const CHATGPT_PROXY_POOL_KEY = 'chatgpt_proxy_pool';
 const STRIPE_PROXY_POOL_KEY = 'stripe_proxy_pool';
 const AUTO_PAYMENT_DETECTION_SETTING_KEY = 'auto_payment_detection_enabled';
 const MAINTENANCE_MODE_SETTING_KEY = 'maintenance_mode_enabled';
+const PAYMENT_PROCESSING_HANDLER_KEY = 'payment_processing_handler';
+const OUTSOURCED_BUYER_API_BASE_URL_KEY = 'outsourced_buyer_api_base_url';
+const OUTSOURCED_ACTIVATION_CODE_POOL_KEY = 'outsourced_activation_code_pool';
+const DEFAULT_OUTSOURCED_BUYER_API_BASE_URL = 'https://scan.amazo.indevs.in';
 const PROXY_COOLDOWN_FAILURES = 3;
 const PROXY_COOLDOWN_MS = 10 * 60 * 1000;
 
 export type ProxyPoolName = 'chatgpt' | 'stripe';
+export type PaymentHandler = 'LOCAL_WORKER' | 'OUTSOURCED_BUYER_API';
 
 export interface ProxyPoolSettingView {
   enabled: boolean;
@@ -39,6 +44,19 @@ export interface AutoPaymentDetectionSettingView {
 
 export interface MaintenanceModeSettingView {
   enabled: boolean;
+}
+
+export interface PaymentProcessingSettingView {
+  handler: PaymentHandler;
+  outsourcedBuyerApiBaseUrl: string;
+  outsourcedActivationCodeCount: number;
+  outsourcedActivationCodePreview: string[];
+}
+
+export interface PaymentProcessingConfig {
+  handler: PaymentHandler;
+  outsourcedBuyerApiBaseUrl: string;
+  outsourcedActivationCodes: string[];
 }
 
 export interface NormalizedProxyInput extends ProxySettingView {
@@ -219,6 +237,64 @@ export async function updateMaintenanceModeSetting(enabled: boolean): Promise<Ma
   return { enabled };
 }
 
+export async function getPaymentProcessingSetting(): Promise<PaymentProcessingSettingView> {
+  return paymentProcessingView(await getPaymentProcessingConfig());
+}
+
+export async function getPaymentProcessingConfig(): Promise<PaymentProcessingConfig> {
+  const [handlerRow, baseUrlRow, activationCodePoolRow] = await Promise.all([
+    prisma.systemSetting.findUnique({ where: { key: PAYMENT_PROCESSING_HANDLER_KEY } }),
+    prisma.systemSetting.findUnique({ where: { key: OUTSOURCED_BUYER_API_BASE_URL_KEY } }),
+    prisma.systemSetting.findUnique({ where: { key: OUTSOURCED_ACTIVATION_CODE_POOL_KEY } }),
+  ]);
+
+  return {
+    handler: normalizePaymentHandler(handlerRow?.value),
+    outsourcedBuyerApiBaseUrl: normalizeOutsourcedBuyerApiBaseUrl(
+      baseUrlRow?.value || DEFAULT_OUTSOURCED_BUYER_API_BASE_URL,
+    ),
+    outsourcedActivationCodes: decodeOutsourcedActivationCodePool(activationCodePoolRow?.value ?? ''),
+  };
+}
+
+export async function updatePaymentProcessingSetting(input: {
+  handler: PaymentHandler;
+  outsourcedBuyerApiBaseUrl?: string | null;
+  outsourcedActivationCodePool?: string | null;
+}): Promise<PaymentProcessingSettingView> {
+  const handler = normalizePaymentHandler(input.handler);
+  const outsourcedBuyerApiBaseUrl = normalizeOutsourcedBuyerApiBaseUrl(
+    input.outsourcedBuyerApiBaseUrl || DEFAULT_OUTSOURCED_BUYER_API_BASE_URL,
+  );
+  const shouldUpdateActivationCodePool = Object.prototype.hasOwnProperty.call(
+    input,
+    'outsourcedActivationCodePool',
+  );
+  const activationCodes = shouldUpdateActivationCodePool
+    ? normalizeActivationCodePool(input.outsourcedActivationCodePool ?? '')
+    : null;
+
+  await Promise.all([
+    prisma.systemSetting.upsert({
+      where: { key: PAYMENT_PROCESSING_HANDLER_KEY },
+      create: { key: PAYMENT_PROCESSING_HANDLER_KEY, value: handler },
+      update: { value: handler },
+    }),
+    prisma.systemSetting.upsert({
+      where: { key: OUTSOURCED_BUYER_API_BASE_URL_KEY },
+      create: { key: OUTSOURCED_BUYER_API_BASE_URL_KEY, value: outsourcedBuyerApiBaseUrl },
+      update: { value: outsourcedBuyerApiBaseUrl },
+    }),
+    ...(shouldUpdateActivationCodePool ? [saveOutsourcedActivationCodePool(activationCodes ?? [])] : []),
+  ]);
+
+  return paymentProcessingView({
+    handler,
+    outsourcedBuyerApiBaseUrl,
+    outsourcedActivationCodes: activationCodes ?? (await getPaymentProcessingConfig()).outsourcedActivationCodes,
+  });
+}
+
 async function getProxyPoolSetting(poolName: ProxyPoolName): Promise<ProxyPoolSettingView> {
   const proxies = await getProxyPoolUrls(poolName);
   const healthByProxyId = await getProxyHealthMap(poolName);
@@ -266,7 +342,7 @@ async function getProxyPoolUrls(poolName: ProxyPoolName): Promise<NormalizedProx
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
-    .map(decrypt)
+    .map((line) => decrypt(line))
     .map(normalizeProxyUrl);
 }
 
@@ -340,6 +416,80 @@ function parseProxyHealth(value: string): ProxyHealthState {
 
 function defaultProxyHealth(): ProxyHealthState {
   return { consecutiveFailures: 0, coolingDownUntil: null };
+}
+
+function normalizePaymentHandler(value: unknown): PaymentHandler {
+  return value === 'OUTSOURCED_BUYER_API' ? 'OUTSOURCED_BUYER_API' : 'LOCAL_WORKER';
+}
+
+function normalizeOutsourcedBuyerApiBaseUrl(value: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(value.trim());
+  } catch {
+    throw new AppError(400, '外包 API 地址格式不正确', 'OUTSOURCED_API_URL_INVALID');
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new AppError(400, '外包 API 地址必须是 http 或 https', 'OUTSOURCED_API_URL_INVALID');
+  }
+
+  parsed.hash = '';
+  parsed.search = '';
+  if (parsed.pathname.replace(/\/+$/, '') === '/buyer') {
+    parsed.pathname = '/';
+  }
+  return parsed.toString().replace(/\/+$/, '');
+}
+
+function normalizeActivationCodePool(value: string): string[] {
+  const seen = new Set<string>();
+  const codes: string[] = [];
+  for (const line of value.split(/\r?\n/)) {
+    const code = line.trim().toUpperCase();
+    if (!code || seen.has(code)) continue;
+    seen.add(code);
+    codes.push(code);
+  }
+  return codes;
+}
+
+function decodeOutsourcedActivationCodePool(value: string): string[] {
+  if (!value.trim()) return [];
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map(decrypt)
+    .map((code) => code.trim().toUpperCase())
+    .filter(Boolean);
+}
+
+async function saveOutsourcedActivationCodePool(activationCodes: string[]): Promise<void> {
+  if (activationCodes.length === 0) {
+    await prisma.systemSetting.deleteMany({ where: { key: OUTSOURCED_ACTIVATION_CODE_POOL_KEY } });
+    return;
+  }
+
+  const encryptedCodes = activationCodes.map((code) => encrypt(code)).join('\n');
+  await prisma.systemSetting.upsert({
+    where: { key: OUTSOURCED_ACTIVATION_CODE_POOL_KEY },
+    create: { key: OUTSOURCED_ACTIVATION_CODE_POOL_KEY, value: encryptedCodes },
+    update: { value: encryptedCodes },
+  });
+}
+
+function paymentProcessingView(config: PaymentProcessingConfig): PaymentProcessingSettingView {
+  return {
+    handler: config.handler,
+    outsourcedBuyerApiBaseUrl: config.outsourcedBuyerApiBaseUrl,
+    outsourcedActivationCodeCount: config.outsourcedActivationCodes.length,
+    outsourcedActivationCodePreview: config.outsourcedActivationCodes.map(maskActivationCode),
+  };
+}
+
+function maskActivationCode(code: string): string {
+  if (code.length <= 6) return '****';
+  return `${code.slice(0, 4)}...${code.slice(-3)}`;
 }
 
 function proxyPoolKey(poolName: ProxyPoolName): string {
