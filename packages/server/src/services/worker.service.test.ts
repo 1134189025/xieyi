@@ -78,6 +78,14 @@ describe('worker.service', () => {
         createdAt: '2026-06-01T00:00:00.000Z',
       },
     ]);
+    expect(prisma.order.count).toHaveBeenNthCalledWith(4, {
+      where: {
+        status: 'PENDING_PAYMENT',
+        paymentHandler: 'LOCAL_WORKER',
+        claimedById: 'worker-1',
+        claimExpiresAt: { gt: expect.any(Date) },
+      },
+    });
   });
 
   it('keeps disabled workers visible but clears their active claimed count', async () => {
@@ -137,6 +145,7 @@ describe('worker.service', () => {
     expect(prisma.order.updateMany).toHaveBeenCalledWith({
       where: {
         status: 'PENDING_PAYMENT',
+        paymentHandler: 'LOCAL_WORKER',
         claimedById: 'worker-1',
         claimExpiresAt: { gt: expect.any(Date) },
       },
@@ -179,6 +188,7 @@ describe('worker.service', () => {
     expect(prisma.order.updateMany).toHaveBeenCalledWith({
       where: {
         status: 'PENDING_PAYMENT',
+        paymentHandler: 'LOCAL_WORKER',
         claimedById: 'worker-1',
         claimExpiresAt: { gt: expect.any(Date) },
       },

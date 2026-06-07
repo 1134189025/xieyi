@@ -61,7 +61,11 @@ describe('OrdersPage', () => {
             id: 'order-1',
             trackingToken: 'track-1',
             status: 'PAYMENT_COMPLETED',
+            paymentHandler: 'LOCAL_WORKER',
             checkoutSessionId: 'cs_test_123',
+            outsourcedTicketId: null,
+            outsourcedPaymentStatus: null,
+            outsourcedLastError: null,
             errorMessage: null,
             completedBy: { id: 'worker-1', username: 'worker', displayName: '张三' },
             claimedBy: { id: 'worker-1', username: 'worker', displayName: '张三' },
@@ -76,7 +80,11 @@ describe('OrdersPage', () => {
             id: 'order-2',
             trackingToken: 'track-2',
             status: 'PENDING_PAYMENT',
+            paymentHandler: 'LOCAL_WORKER',
             checkoutSessionId: 'cs_test_456',
+            outsourcedTicketId: null,
+            outsourcedPaymentStatus: null,
+            outsourcedLastError: null,
             errorMessage: null,
             completedBy: null,
             claimedBy: { id: 'worker-2', username: 'worker2', displayName: '李四' },
@@ -87,8 +95,27 @@ describe('OrdersPage', () => {
             completedAt: null,
             createdAt: '2026-06-01T00:05:00.000Z',
           },
+          {
+            id: 'order-3',
+            trackingToken: 'track-3',
+            status: 'PAYMENT_COMPLETED',
+            paymentHandler: 'OUTSOURCED_BUYER_API',
+            checkoutSessionId: 'cs_test_789',
+            outsourcedTicketId: 'Toutsource123',
+            outsourcedPaymentStatus: 'paid',
+            outsourcedLastError: null,
+            errorMessage: null,
+            completedBy: null,
+            claimedBy: null,
+            generationErrorCode: null,
+            generationErrorStage: null,
+            generationErrorDetail: null,
+            generationErrorHttpStatus: null,
+            completedAt: '2026-06-01T00:12:00.000Z',
+            createdAt: '2026-06-01T00:06:00.000Z',
+          },
         ],
-        total: 2,
+        total: 3,
       },
     });
 
@@ -97,6 +124,13 @@ describe('OrdersPage', () => {
 
     expect(container.textContent).toContain('订单管理');
     expect(container.textContent).toContain('track-1');
+    expect(container.textContent).toContain('track-3');
+    expect(container.textContent).toContain('处理方式');
+    expect(container.textContent).toContain('本地工人扫码');
+    expect(container.textContent).toContain('外包自动支付');
+    expect(container.textContent).toContain('外包自动完成');
+    expect(container.textContent).toContain('Toutsource123');
+    expect(container.textContent).toContain('状态：paid');
     expect(container.textContent).toContain('归属工人');
     expect(container.textContent).toContain('完成：张三');
     expect(container.textContent).toContain('领取：李四');
@@ -154,8 +188,18 @@ function orderResponse(overrides: Partial<{
     id: overrides.id ?? 'order-1',
     trackingToken: overrides.trackingToken ?? 'track-1',
     status: overrides.status ?? 'PAYMENT_COMPLETED',
+    paymentHandler: 'LOCAL_WORKER',
     checkoutSessionId: 'cs_test_123',
+    outsourcedTicketId: null,
+    outsourcedPaymentStatus: null,
+    outsourcedLastError: null,
     errorMessage: null,
+    claimedBy: null,
+    completedBy: null,
+    generationErrorCode: null,
+    generationErrorStage: null,
+    generationErrorDetail: null,
+    generationErrorHttpStatus: null,
     completedAt: overrides.completedAt ?? null,
     createdAt: '2026-06-01T00:00:00.000Z',
   };

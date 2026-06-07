@@ -21,6 +21,11 @@ enum OrderStatus {
   CANCELLED
 }
 
+enum PaymentHandler {
+  LOCAL_WORKER
+  OUTSOURCED_BUYER_API
+}
+
 model User {
   id           String   @id @default(uuid())
   username     String   @unique
@@ -63,6 +68,7 @@ model Order {
   id                   String      @id @default(uuid())
   trackingToken        String      @unique @map("tracking_token")
   status               OrderStatus @default(PENDING_PAYMENT)
+  paymentHandler       PaymentHandler @default(LOCAL_WORKER) @map("payment_handler")
   redemptionCodeId     String?     @unique @map("redemption_code_id")
   checkoutSessionId    String?     @map("checkout_session_id")
   checkoutUrl          String?     @map("checkout_url")
@@ -84,6 +90,11 @@ model Order {
   generationErrorDetail String?     @map("generation_error_detail")
   generationErrorHttpStatus Int?    @map("generation_error_http_status")
   submittedRedemptionCode String?  @map("submitted_redemption_code")
+  outsourcedTicketId   String?      @map("outsourced_ticket_id")
+  outsourcedPaymentStatus String?    @map("outsourced_payment_status")
+  outsourcedLastError  String?      @map("outsourced_last_error")
+  outsourcedSubmittedAt DateTime?   @map("outsourced_submitted_at")
+  outsourcedFinishedAt DateTime?    @map("outsourced_finished_at")
   claimedById          String?      @map("claimed_by_id")
   claimedAt            DateTime?    @map("claimed_at")
   claimExpiresAt       DateTime?    @map("claim_expires_at")
@@ -101,6 +112,8 @@ model Order {
   @@index([setupIntentId])
   @@index([createdAt])
   @@index([status, generationQueuedAt, id])
+  @@index([paymentHandler, status, createdAt, id])
+  @@index([outsourcedTicketId])
   @@index([generationFinishedAt])
   @@index([claimedById])
   @@index([status, claimedById, claimExpiresAt, createdAt, id])

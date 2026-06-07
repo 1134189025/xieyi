@@ -46,9 +46,10 @@ async function runPixPaymentDetection(): Promise<PixPaymentDetectionResult> {
   const orders = await prisma.order.findMany({
     where: {
       status: 'PENDING_PAYMENT',
+      paymentHandler: 'LOCAL_WORKER',
       setupIntentId: { not: null },
       setupIntentClientSecret: { not: null },
-    },
+    } as never,
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     take: PAYMENT_STATUS_CHECK_LIMIT,
   });
@@ -97,6 +98,7 @@ async function detectSingleOrderPayment(order: Order, stripeProxy: SelectedProxy
         "updated_at" = NOW()
       WHERE "id" = ${order.id}
         AND "status" = 'PENDING_PAYMENT'::"OrderStatus"
+        AND "payment_handler" = 'LOCAL_WORKER'::"PaymentHandler"
     `;
     if (changed === 0) return false;
 

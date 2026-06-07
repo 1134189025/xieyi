@@ -10,13 +10,23 @@ import {
 } from './settings.service.ts';
 import { decrypt, encrypt } from '../utils/crypto.ts';
 import { prisma } from '../db.ts';
-import { broadcastOrderReady } from '../ws/index.ts';
+import { broadcastOrderReady, broadcastOrderStatusChange } from '../ws/index.ts';
 import { failCreatingPaymentOrder } from './order.service.ts';
+import {
+  selectOutsourcedActivationCode,
+  submitOutsourcedPixPayment,
+} from './outsourced-payment.service.ts';
 
 const SAFE_PAYMENT_ERROR_CODE = 'PAYMENT_FAILED';
 const TERMINAL_GENERATION_ERROR_CODES = new Set([
   'ACCOUNT_NOT_ELIGIBLE',
   'CHATGPT_SESSION_UNRECOGNIZED',
+  'OUTSOURCED_CODE_UNAVAILABLE',
+  'OUTSOURCED_PIX_CODE_MISSING',
+  'OUTSOURCED_SUBMIT_FAILED',
+  'OUTSOURCED_API_INVALID_RESPONSE',
+  'OUTSOURCED_API_TIMEOUT',
+  'OUTSOURCED_API_UNAVAILABLE',
 ]);
 
 interface ProcessPixGenerationJobInput {
@@ -64,39 +74,34 @@ export async function processPixGenerationJob(input: ProcessPixGenerationJobInpu
       ? new Date(stripeResult.pix.expiresAt * 1000)
       : null;
     const pixCode = stripeResult.pix.data?.trim() || null;
-    const pixQrPng = qrPngBuffer ? new Uint8Array(qrPngBuffer) : null;
+    const pixQrPng: Uint8Array<ArrayBuffer> | null = qrPngBuffer ? Uint8Array.from(qrPngBuffer) : null;
     const pixImageUrl = firstUsableUrl(
       stripeResult.pix.imageUrlPng,
       stripeResult.pix.imageUrlSvg,
       stripeResult.pix.hostedInstructionsUrl,
     );
 
-    const changed = await prisma.order.updateMany({
-      where: { id: input.orderId, status: 'CREATING_PAYMENT' },
-      data: {
-        status: 'PENDING_PAYMENT',
-        checkoutSessionId: stripeResult.checkoutSessionId,
-        checkoutUrl,
-        paymentMethodId: stripeResult.paymentMethodId,
-        pixCode,
-        pixQrPng,
-        pixExpiresAt,
-        pixImageUrl,
-        setupIntentId: stripeResult.pix.setupIntentId ?? null,
-        setupIntentClientSecret: stripeResult.pix.setupIntentClientSecret
-          ? encrypt(stripeResult.pix.setupIntentClientSecret)
-          : null,
-        billingProfileJson: profile as object,
-        encryptedSessionData: null,
-        generationFinishedAt: new Date(),
-        generationErrorCode: null,
-      },
-    });
-    if (changed.count === 0) return;
+    const generatedPix = {
+      checkoutSessionId: stripeResult.checkoutSessionId,
+      checkoutUrl,
+      paymentMethodId: stripeResult.paymentMethodId,
+      pixCode,
+      pixQrPng,
+      pixExpiresAt,
+      pixImageUrl,
+      setupIntentId: stripeResult.pix.setupIntentId ?? null,
+      setupIntentClientSecret: stripeResult.pix.setupIntentClientSecret
+        ? encrypt(stripeResult.pix.setupIntentClientSecret)
+        : null,
+      billingProfileJson: profile as object,
+    };
 
-    const updatedOrder = await prisma.order.findUnique({ where: { id: input.orderId } });
-    if (!updatedOrder) return;
-    broadcastOrderReady(updatedOrder);
+    if ((order as { paymentHandler?: string | null }).paymentHandler === 'OUTSOURCED_BUYER_API') {
+      await submitGeneratedPixToOutsourcedBuyerApi(input.orderId, generatedPix);
+      return;
+    }
+
+    await publishGeneratedPixForLocalWorkers(input.orderId, generatedPix);
   } catch (error) {
     failedPoolName = proxyPoolNameFromError(error);
     failedProxy = failedPoolName === selectedProxyPoolName ? selectedProxy : null;
@@ -112,6 +117,107 @@ export async function processPixGenerationJob(input: ProcessPixGenerationJobInpu
 
     await failCreatingPaymentOrder(input.orderId, errorCode, generationFailureDiagnosticFromError(error));
   }
+}
+
+async function publishGeneratedPixForLocalWorkers(
+  orderId: string,
+  generatedPix: {
+    checkoutSessionId: string;
+    checkoutUrl: string;
+    paymentMethodId: string;
+    pixCode: string | null;
+    pixQrPng: Uint8Array<ArrayBuffer> | null;
+    pixExpiresAt: Date | null;
+    pixImageUrl: string | null;
+    setupIntentId: string | null;
+    setupIntentClientSecret: string | null;
+    billingProfileJson: object;
+  },
+) {
+  const changed = await prisma.order.updateMany({
+    where: { id: orderId, status: 'CREATING_PAYMENT' },
+    data: {
+      status: 'PENDING_PAYMENT',
+      checkoutSessionId: generatedPix.checkoutSessionId,
+      checkoutUrl: generatedPix.checkoutUrl,
+      paymentMethodId: generatedPix.paymentMethodId,
+      pixCode: generatedPix.pixCode,
+      pixQrPng: generatedPix.pixQrPng,
+      pixExpiresAt: generatedPix.pixExpiresAt,
+      pixImageUrl: generatedPix.pixImageUrl,
+      setupIntentId: generatedPix.setupIntentId,
+      setupIntentClientSecret: generatedPix.setupIntentClientSecret,
+      billingProfileJson: generatedPix.billingProfileJson,
+      encryptedSessionData: null,
+      generationFinishedAt: new Date(),
+      generationErrorCode: null,
+    },
+  });
+  if (changed.count === 0) return;
+
+  const updatedOrder = await prisma.order.findUnique({ where: { id: orderId } });
+  if (!updatedOrder) return;
+  broadcastOrderReady(updatedOrder);
+}
+
+async function submitGeneratedPixToOutsourcedBuyerApi(
+  orderId: string,
+  generatedPix: {
+    checkoutSessionId: string;
+    checkoutUrl: string;
+    paymentMethodId: string;
+    pixCode: string | null;
+    setupIntentId: string | null;
+    setupIntentClientSecret: string | null;
+    billingProfileJson: object;
+  },
+) {
+  if (!generatedPix.pixCode) {
+    throw Object.assign(new Error('Generated Pix payload is missing for outsourced payment'), {
+      code: 'OUTSOURCED_PIX_CODE_MISSING',
+      generationFailureDiagnostic: {
+        stage: 'outsourced_submit',
+        detail: 'missing_pix_code',
+        httpStatus: null,
+      },
+    });
+  }
+
+  const activationCode = await selectOutsourcedActivationCode();
+  const outsourcedSubmission = await submitOutsourcedPixPayment({
+    activationCode,
+    pixCode: generatedPix.pixCode,
+  });
+
+  const changed = await prisma.order.updateMany({
+    where: { id: orderId, status: 'CREATING_PAYMENT' },
+    data: {
+      status: 'PENDING_PAYMENT',
+      paymentHandler: 'OUTSOURCED_BUYER_API',
+      checkoutSessionId: generatedPix.checkoutSessionId,
+      checkoutUrl: generatedPix.checkoutUrl,
+      paymentMethodId: generatedPix.paymentMethodId,
+      pixCode: null,
+      pixQrPng: null,
+      pixExpiresAt: null,
+      pixImageUrl: null,
+      setupIntentId: generatedPix.setupIntentId,
+      setupIntentClientSecret: generatedPix.setupIntentClientSecret,
+      billingProfileJson: generatedPix.billingProfileJson,
+      encryptedSessionData: null,
+      generationFinishedAt: new Date(),
+      generationErrorCode: null,
+      outsourcedTicketId: outsourcedSubmission.ticketId,
+      outsourcedPaymentStatus: outsourcedSubmission.status,
+      outsourcedLastError: null,
+      outsourcedSubmittedAt: new Date(),
+    } as never,
+  });
+  if (changed.count === 0) return;
+
+  const updatedOrder = await prisma.order.findUnique({ where: { id: orderId } });
+  if (!updatedOrder) return;
+  broadcastOrderStatusChange(updatedOrder);
 }
 
 async function selectPixGenerationProxy(): Promise<{ poolName: ProxyPoolName | null; proxy: SelectedProxy | null }> {

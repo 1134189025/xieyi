@@ -139,6 +139,7 @@ describe('payment-status.service', () => {
       expect.objectContaining({
         where: {
           status: 'PENDING_PAYMENT',
+          paymentHandler: 'LOCAL_WORKER',
           setupIntentId: { not: null },
           setupIntentClientSecret: { not: null },
         },

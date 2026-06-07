@@ -143,15 +143,17 @@ async function getWorkerPerformanceStats(
     prisma.order.count({
       where: {
         status: 'PENDING_PAYMENT',
+        paymentHandler: 'LOCAL_WORKER',
         claimedById: { not: null },
         claimExpiresAt: { gt: now },
-      },
+      } as never,
     }),
     prisma.order.count({
       where: {
         status: 'PENDING_PAYMENT',
+        paymentHandler: 'LOCAL_WORKER',
         OR: [{ claimedById: null }, { claimExpiresAt: { lt: now } }],
-      },
+      } as never,
     }),
     prisma.order.count({
       where: {

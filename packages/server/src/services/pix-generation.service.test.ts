@@ -11,6 +11,8 @@ const prisma = {
 const decrypt = vi.fn((ciphertext: string) => ciphertext.replace(/^encrypted:/, ''));
 const parseChatGptSessionInput = vi.fn();
 const generatePixPayment = vi.fn();
+const selectOutsourcedActivationCode = vi.fn();
+const submitOutsourcedPixPayment = vi.fn();
 const selectHealthyProxy = vi.fn();
 const recordProxySuccess = vi.fn();
 const recordProxyFailure = vi.fn();
@@ -24,6 +26,10 @@ vi.mock('./chatgpt-session.service.ts', () => ({
   parseChatGptSessionInput,
 }));
 vi.mock('./pix-payment.service.ts', () => ({ generatePixPayment }));
+vi.mock('./outsourced-payment.service.ts', () => ({
+  selectOutsourcedActivationCode,
+  submitOutsourcedPixPayment,
+}));
 vi.mock('./settings.service.ts', () => ({
   selectHealthyProxy,
   recordProxySuccess,
@@ -71,6 +77,12 @@ describe('pix-generation.service', () => {
     parseChatGptSessionInput.mockReturnValue(credential);
     selectHealthyProxy.mockResolvedValue(stripeProxy);
     shouldCountProxyFailure.mockReturnValue(false);
+    selectOutsourcedActivationCode.mockResolvedValue('DP-FIRST-CODE');
+    submitOutsourcedPixPayment.mockResolvedValue({
+      ticketId: 'Toutsource123',
+      status: 'queued',
+      message: '已提交，后台处理中',
+    });
     generatePixPayment.mockResolvedValue({
       stripeResult: {
         checkoutSessionId: 'cs_test_123',
@@ -131,6 +143,49 @@ describe('pix-generation.service', () => {
     expect(recordProxySuccess).toHaveBeenCalledWith('stripe', 'stripe-proxy-1');
     expect(recordProxySuccess).not.toHaveBeenCalledWith('chatgpt', expect.anything());
     expect(broadcastOrderReady).toHaveBeenCalledWith(pendingOrder);
+    expect(submitOutsourcedPixPayment).not.toHaveBeenCalled();
+  });
+
+  it('外包模式生成 Pix 后提交买家端 API 并保存外包票据，不广播给本地工人', async () => {
+    const outsourcedOrder = {
+      ...queuedOrder(),
+      paymentHandler: 'OUTSOURCED_BUYER_API',
+    };
+    const pendingOrder = {
+      ...outsourcedOrder,
+      status: 'PENDING_PAYMENT',
+      outsourcedTicketId: 'Toutsource123',
+      outsourcedPaymentStatus: 'queued',
+      pixCode: null,
+      pixQrPng: null,
+      pixImageUrl: null,
+      completedAt: null,
+    };
+    prisma.order.findUnique.mockResolvedValueOnce(outsourcedOrder).mockResolvedValueOnce(pendingOrder);
+
+    await processPixGenerationJob({ orderId: 'order-1', finalAttempt: false });
+
+    expect(selectOutsourcedActivationCode).toHaveBeenCalledTimes(1);
+    expect(submitOutsourcedPixPayment).toHaveBeenCalledWith({
+      activationCode: 'DP-FIRST-CODE',
+      pixCode: 'pix-code',
+    });
+    expect(prisma.order.updateMany).toHaveBeenLastCalledWith({
+      where: { id: 'order-1', status: 'CREATING_PAYMENT' },
+      data: expect.objectContaining({
+        status: 'PENDING_PAYMENT',
+        paymentHandler: 'OUTSOURCED_BUYER_API',
+        outsourcedTicketId: 'Toutsource123',
+        outsourcedPaymentStatus: 'queued',
+        outsourcedSubmittedAt: expect.any(Date),
+        encryptedSessionData: null,
+        pixCode: null,
+        pixQrPng: null,
+        pixImageUrl: null,
+      }),
+    });
+    expect(broadcastOrderReady).not.toHaveBeenCalled();
+    expect(broadcastOrderStatusChange).toHaveBeenCalledWith(pendingOrder);
   });
 
   it('只有 Stripe 图片链接且没有 Pix 码串时仍进入待付款并落库图片', async () => {

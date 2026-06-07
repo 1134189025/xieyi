@@ -25,10 +25,12 @@ vi.mock('../../hooks/useSocket', () => ({
   }),
 }));
 
-function pendingOrder(queueEstimate: unknown) {
+function pendingOrder(queueEstimate: unknown, overrides: Record<string, unknown> = {}) {
   return {
     trackingToken: 'track-1',
     status: 'PENDING_PAYMENT',
+    paymentHandler: 'LOCAL_WORKER',
+    outsourcedPaymentStatus: null,
     pixCode: 'pix-code',
     pixQrPngBase64: null,
     pixExpiresAt: '2026-06-01T01:00:00.000Z',
@@ -37,6 +39,7 @@ function pendingOrder(queueEstimate: unknown) {
     createdAt: '2026-06-01T00:00:00.000Z',
     errorMessage: null,
     queueEstimate,
+    ...overrides,
   };
 }
 
@@ -52,6 +55,8 @@ function creatingOrder(queueEstimate: unknown) {
   return {
     trackingToken: 'track-1',
     status: 'CREATING_PAYMENT',
+    paymentHandler: 'LOCAL_WORKER',
+    outsourcedPaymentStatus: null,
     pixCode: null,
     pixQrPngBase64: null,
     pixExpiresAt: null,
@@ -194,6 +199,31 @@ describe('TrackOrderPage', () => {
     expect(container.textContent).toContain('排队第 3 位');
     expect(container.textContent).toContain('预计约 15 分钟');
     expect(container.querySelector<HTMLInputElement>('input[readonly]')?.value).toBe('pix-code');
+  });
+
+  it('shows outsourced pending payment status without exposing Pix payment artifacts', async () => {
+    (publicApi.get as Mock).mockResolvedValue({
+      data: pendingOrder(null, {
+        paymentHandler: 'OUTSOURCED_BUYER_API',
+        outsourcedPaymentStatus: 'authorizing',
+        pixCode: null,
+        pixQrPngBase64: null,
+        pixImageUrl: null,
+        queueEstimate: null,
+      }),
+    });
+
+    const { container, root } = renderTrackOrderPage();
+    mountedRoot = root;
+    await flushAsyncWork();
+
+    expect(container.textContent).toContain('外包自动支付处理中');
+    expect(container.textContent).toContain('外包状态：authorizing');
+    expect(container.textContent).not.toContain('请让工人扫描二维码');
+    expect(container.textContent).not.toContain('排队第');
+    expect(container.querySelector<HTMLInputElement>('input[readonly]')).toBeNull();
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="复制 Pix 付款码"]')).toBeNull();
+    expect(container.querySelector<HTMLImageElement>('img[alt="Pix 二维码"]')).toBeNull();
   });
 
   it('shows Pix image when payment code is absent but pixImageUrl is available', async () => {

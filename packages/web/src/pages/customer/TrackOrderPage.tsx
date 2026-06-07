@@ -11,6 +11,8 @@ import { safeErrorMessage } from '../../utils/labels';
 interface OrderData {
   trackingToken: string;
   status: string;
+  paymentHandler?: 'LOCAL_WORKER' | 'OUTSOURCED_BUYER_API';
+  outsourcedPaymentStatus?: string | null;
   pixCode: string | null;
   pixQrPngBase64: string | null;
   pixExpiresAt: string | null;
@@ -104,6 +106,7 @@ export default function TrackOrderPage() {
   const isPending = order.status === 'PENDING_PAYMENT';
   const isCreating = order.status === 'CREATING_PAYMENT';
   const isClosed = order.status === 'EXPIRED' || order.status === 'CANCELLED';
+  const isOutsourcedPayment = order.paymentHandler === 'OUTSOURCED_BUYER_API';
 
   return (
     <div className="checkout-shell">
@@ -111,7 +114,9 @@ export default function TrackOrderPage() {
         <div className="checkout-content">
           <div className="checkout-brand-row flex-col items-start sm:flex-row sm:items-center">
             <div className="min-w-0">
-              <h1 className="checkout-title">{isPending ? '等待 Pix 付款' : '订单状态'}</h1>
+              <h1 className="checkout-title">
+                {isPending && isOutsourcedPayment ? '外包自动支付处理中' : isPending ? '等待 Pix 付款' : '订单状态'}
+              </h1>
               <p className="mt-2 break-all font-mono text-xs text-app-secondary">{order.trackingToken}</p>
             </div>
             <StatusBadge status={order.status} />
@@ -124,7 +129,8 @@ export default function TrackOrderPage() {
           {isCompleted && <CompletedOrder order={order} />}
           {isFailed && <FailedOrder order={order} />}
           {isCreating && <CreatingPaymentOrder queueEstimate={order.queueEstimate} />}
-          {isPending && (
+          {isPending && isOutsourcedPayment && <OutsourcedPendingPaymentOrder order={order} />}
+          {isPending && !isOutsourcedPayment && (
             <div className="view-section">
               <p className="checkout-lead">请让工人扫描二维码，或复制 Pix 付款码完成付款确认。</p>
               {order.queueEstimate && <PendingQueueEstimateCard queueEstimate={order.queueEstimate} />}
@@ -147,6 +153,21 @@ export default function TrackOrderPage() {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function OutsourcedPendingPaymentOrder({ order }: { order: OrderData }) {
+  return (
+    <div className="view-section py-8 text-center">
+      <Loader2 className="mx-auto h-12 w-12 animate-spin text-app-accent" />
+      <h2 className="mt-4 text-xl font-extrabold text-app-primary">外包自动支付处理中</h2>
+      <p className="mx-auto mt-2 max-w-md text-sm text-app-secondary">
+        Pix 已提交给外包自动支付通道，正在等待对方确认付款结果。此订单不会进入本地工人扫码队列。
+      </p>
+      {order.outsourcedPaymentStatus && (
+        <p className="mt-4 text-xs text-app-secondary">外包状态：{order.outsourcedPaymentStatus}</p>
+      )}
     </div>
   );
 }
@@ -191,7 +212,7 @@ function CreatingPaymentOrder({ queueEstimate }: { queueEstimate: QueueEstimate 
     <div className="view-section py-8 text-center">
       <Loader2 className="mx-auto h-12 w-12 animate-spin text-app-accent" />
       <h2 className="mt-4 text-xl font-extrabold text-app-primary">正在排队生成 Pix 二维码</h2>
-      <p className="mt-2 text-sm text-app-secondary">订单已经记录，worker 空闲后会自动生成 Pix。</p>
+      <p className="mt-2 text-sm text-app-secondary">订单已经记录，后台空闲后会自动生成 Pix。</p>
       {queueEstimate && <GenerationQueueEstimateCard queueEstimate={queueEstimate} />}
     </div>
   );

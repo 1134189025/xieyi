@@ -17,6 +17,7 @@ const prisma = {
 const enqueuePixGenerationJob = vi.fn();
 const getPixGenerationQueueSnapshot = vi.fn();
 const getMaintenanceModeSetting = vi.fn();
+const getPaymentProcessingSetting = vi.fn();
 const broadcastOrderStatusChange = vi.fn();
 const encrypt = vi.fn((plaintext: string) => `encrypted:${plaintext}`);
 
@@ -26,7 +27,7 @@ vi.mock('../queues/pix-generation.queue.ts', () => ({
   getPixGenerationQueueSnapshot,
   secondsPerGenerationEstimate: () => 300,
 }));
-vi.mock('./settings.service.ts', () => ({ getMaintenanceModeSetting }));
+vi.mock('./settings.service.ts', () => ({ getMaintenanceModeSetting, getPaymentProcessingSetting }));
 vi.mock('../utils/crypto.ts', () => ({ encrypt }));
 vi.mock('../ws/index.ts', () => ({
   broadcastOrderStatusChange,
@@ -56,6 +57,12 @@ describe('order.service', () => {
     prisma.order.count.mockResolvedValue(0);
     prisma.order.findMany.mockResolvedValue([]);
     getMaintenanceModeSetting.mockResolvedValue({ enabled: false });
+    getPaymentProcessingSetting.mockResolvedValue({
+      handler: 'LOCAL_WORKER',
+      outsourcedBuyerApiBaseUrl: 'https://scan.amazo.indevs.in',
+      outsourcedActivationCodeCount: 0,
+      outsourcedActivationCodePreview: [],
+    });
     getPixGenerationQueueSnapshot.mockResolvedValue({
       waitingCount: 1,
       delayedCount: 0,
@@ -100,7 +107,34 @@ describe('order.service', () => {
     });
     expect(enqueuePixGenerationJob).toHaveBeenCalledWith({ orderId: 'order-1' });
     expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(prisma.$queryRaw.mock.calls[0]).toContain('LOCAL_WORKER');
     expect(prisma.$executeRaw).not.toHaveBeenCalled();
+  });
+
+  it('freezes outsourced payment handler on newly created queued orders', async () => {
+    getPaymentProcessingSetting.mockResolvedValue({
+      handler: 'OUTSOURCED_BUYER_API',
+      outsourcedBuyerApiBaseUrl: 'https://scan.amazo.indevs.in',
+      outsourcedActivationCodeCount: 1,
+      outsourcedActivationCodePreview: ['DP-F...ODE'],
+    });
+    prisma.$queryRaw.mockResolvedValue([{
+      id: 'order-1',
+      redemptionCodeId: 'code-1',
+      trackingToken: 'track-1',
+      status: 'CREATING_PAYMENT',
+      paymentHandler: 'OUTSOURCED_BUYER_API',
+      generationQueuedAt: new Date('2026-06-01T00:00:00.000Z'),
+      createdAt: new Date('2026-06-01T00:00:00.000Z'),
+    }]);
+    enqueuePixGenerationJob.mockResolvedValue({ id: 'pix-generation-order-1' });
+
+    await expect(createOrder('ABCD-1234', 'session-token-value')).resolves.toMatchObject({
+      status: 'CREATING_PAYMENT',
+      paymentHandler: 'OUTSOURCED_BUYER_API',
+    });
+
+    expect(prisma.$queryRaw.mock.calls[0]).toContain('OUTSOURCED_BUYER_API');
   });
 
   it('rejects new orders during maintenance mode before reserving a redemption code', async () => {
@@ -176,6 +210,35 @@ describe('order.service', () => {
     });
   });
 
+  it('hides Pix artifacts and queue estimate while outsourced payments are processing', async () => {
+    prisma.order.findUnique.mockResolvedValue({
+      id: 'order-1',
+      trackingToken: 'track-1',
+      status: 'PENDING_PAYMENT',
+      paymentHandler: 'OUTSOURCED_BUYER_API',
+      outsourcedPaymentStatus: 'authorizing',
+      outsourcedTicketId: 'Toutsource123',
+      pixCode: '000201pix-code',
+      pixQrPng: Buffer.from('png'),
+      pixExpiresAt: new Date('2026-06-01T01:00:00.000Z'),
+      pixImageUrl: 'https://stripe.test/pix.png',
+      completedAt: null,
+      createdAt: new Date('2026-06-01T00:00:00.000Z'),
+      generationErrorCode: null,
+      errorMessage: null,
+    });
+
+    await expect(getOrderByTrackingToken('track-1')).resolves.toMatchObject({
+      status: 'PENDING_PAYMENT',
+      paymentHandler: 'OUTSOURCED_BUYER_API',
+      outsourcedPaymentStatus: 'authorizing',
+      pixCode: null,
+      pixQrPngBase64: null,
+      pixImageUrl: null,
+      queueEstimate: null,
+    });
+  });
+
   it('stores a safe customer failure message when Pix generation fails with account not eligible', async () => {
     const failedOrder = {
       id: 'order-1',
@@ -246,6 +309,28 @@ describe('order.service', () => {
     });
   });
 
+  it('worker queue only returns local worker payment orders', async () => {
+    prisma.order.findMany.mockResolvedValue([]);
+    prisma.order.count.mockResolvedValue(0);
+
+    await getWorkerOrders(1, 20);
+
+    expect(prisma.order.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          status: 'PENDING_PAYMENT',
+          paymentHandler: 'LOCAL_WORKER',
+        }),
+      }),
+    );
+    expect(prisma.order.count).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        status: 'PENDING_PAYMENT',
+        paymentHandler: 'LOCAL_WORKER',
+      }),
+    });
+  });
+
   it('falls back to the generic customer failure message for unknown generation errors', async () => {
     prisma.order.findUnique.mockResolvedValue({
       id: 'order-1',
@@ -298,6 +383,7 @@ describe('order.service', () => {
       expect.objectContaining({
         where: {
           status: 'PENDING_PAYMENT',
+          paymentHandler: 'LOCAL_WORKER',
           OR: [{ claimedById: null }, { claimExpiresAt: { lt: expect.any(Date) } }],
         },
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
@@ -442,6 +528,7 @@ describe('order.service', () => {
       expect.objectContaining({
         where: {
           status: 'PENDING_PAYMENT',
+          paymentHandler: 'LOCAL_WORKER',
           claimedById: 'worker-1',
           claimExpiresAt: { gt: expect.any(Date) },
         },
@@ -465,13 +552,19 @@ describe('order.service', () => {
       where: {
         id: 'order-1',
         status: 'PENDING_PAYMENT',
+        paymentHandler: 'LOCAL_WORKER',
         claimedById: 'worker-1',
         claimExpiresAt: { gt: expect.any(Date) },
       },
       data: { claimExpiresAt: expect.any(Date) },
     });
     expect(prisma.order.updateMany).toHaveBeenNthCalledWith(2, {
-      where: { id: 'order-1', status: 'PENDING_PAYMENT', claimedById: 'worker-1' },
+      where: {
+        id: 'order-1',
+        status: 'PENDING_PAYMENT',
+        paymentHandler: 'LOCAL_WORKER',
+        claimedById: 'worker-1',
+      },
       data: { claimedById: null, claimedAt: null, claimExpiresAt: null },
     });
   });
@@ -501,6 +594,7 @@ describe('order.service', () => {
       where: {
         id: 'order-1',
         status: 'PENDING_PAYMENT',
+        paymentHandler: 'LOCAL_WORKER',
         claimedById: 'worker-1',
         claimExpiresAt: { gt: completedAt },
       },
