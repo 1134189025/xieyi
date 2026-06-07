@@ -201,7 +201,7 @@ describe('TrackOrderPage', () => {
     expect(container.querySelector<HTMLInputElement>('input[readonly]')?.value).toBe('pix-code');
   });
 
-  it('shows outsourced pending payment status without exposing Pix payment artifacts', async () => {
+  it('shows outsourced pending payment as a minimal processing view', async () => {
     (publicApi.get as Mock).mockResolvedValue({
       data: pendingOrder(null, {
         paymentHandler: 'OUTSOURCED_BUYER_API',
@@ -217,10 +217,16 @@ describe('TrackOrderPage', () => {
     mountedRoot = root;
     await flushAsyncWork();
 
-    expect(container.textContent).toContain('外包自动支付处理中');
-    expect(container.textContent).toContain('外包状态：authorizing');
+    expect(container.textContent).toContain('自动支付处理中');
+    expect(container.textContent).toContain('正在支付中');
+    expect(container.textContent).not.toContain('外包状态');
+    expect(container.textContent).not.toContain('authorizing');
+    expect(container.textContent).not.toContain('track-1');
+    expect(container.textContent).not.toContain('创建时间');
     expect(container.textContent).not.toContain('请让工人扫描二维码');
     expect(container.textContent).not.toContain('排队第');
+    expect(container.textContent).not.toContain('Pix 已提交给外包自动支付通道');
+    expect(container.textContent).not.toContain('提交新订单');
     expect(container.querySelector<HTMLInputElement>('input[readonly]')).toBeNull();
     expect(container.querySelector<HTMLButtonElement>('button[aria-label="复制 Pix 付款码"]')).toBeNull();
     expect(container.querySelector<HTMLImageElement>('img[alt="Pix 二维码"]')).toBeNull();

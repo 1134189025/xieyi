@@ -107,6 +107,7 @@ export default function TrackOrderPage() {
   const isCreating = order.status === 'CREATING_PAYMENT';
   const isClosed = order.status === 'EXPIRED' || order.status === 'CANCELLED';
   const isOutsourcedPayment = order.paymentHandler === 'OUTSOURCED_BUYER_API';
+  const isMinimalOutsourcedPending = isPending && isOutsourcedPayment;
 
   return (
     <div className="checkout-shell">
@@ -115,21 +116,25 @@ export default function TrackOrderPage() {
           <div className="checkout-brand-row flex-col items-start sm:flex-row sm:items-center">
             <div className="min-w-0">
               <h1 className="checkout-title">
-                {isPending && isOutsourcedPayment ? '外包自动支付处理中' : isPending ? '等待 Pix 付款' : '订单状态'}
+                {isMinimalOutsourcedPending ? '自动支付处理中' : isPending ? '等待 Pix 付款' : '订单状态'}
               </h1>
-              <p className="mt-2 break-all font-mono text-xs text-app-secondary">{order.trackingToken}</p>
+              {!isMinimalOutsourcedPending && (
+                <p className="mt-2 break-all font-mono text-xs text-app-secondary">{order.trackingToken}</p>
+              )}
             </div>
-            <StatusBadge status={order.status} />
+            {!isMinimalOutsourcedPending && <StatusBadge status={order.status} />}
           </div>
 
-          <p className="checkout-lead">
-            创建时间：{new Date(order.createdAt).toLocaleString('zh-CN')}
-          </p>
+          {!isMinimalOutsourcedPending && (
+            <p className="checkout-lead">
+              创建时间：{new Date(order.createdAt).toLocaleString('zh-CN')}
+            </p>
+          )}
 
           {isCompleted && <CompletedOrder order={order} />}
           {isFailed && <FailedOrder order={order} />}
           {isCreating && <CreatingPaymentOrder queueEstimate={order.queueEstimate} />}
-          {isPending && isOutsourcedPayment && <OutsourcedPendingPaymentOrder order={order} />}
+          {isMinimalOutsourcedPending && <OutsourcedPendingPaymentOrder />}
           {isPending && !isOutsourcedPayment && (
             <div className="view-section">
               <p className="checkout-lead">请让工人扫描二维码，或复制 Pix 付款码完成付款确认。</p>
@@ -144,7 +149,7 @@ export default function TrackOrderPage() {
           )}
           {isClosed && <ClosedOrder />}
 
-          {!isCompleted && (
+          {!isCompleted && !isMinimalOutsourcedPending && (
             <div className="mt-6 text-center">
               <Link to="/" className="checkout-link">
                 提交新订单
@@ -157,17 +162,11 @@ export default function TrackOrderPage() {
   );
 }
 
-function OutsourcedPendingPaymentOrder({ order }: { order: OrderData }) {
+function OutsourcedPendingPaymentOrder() {
   return (
     <div className="view-section py-8 text-center">
       <Loader2 className="mx-auto h-12 w-12 animate-spin text-app-accent" />
-      <h2 className="mt-4 text-xl font-extrabold text-app-primary">外包自动支付处理中</h2>
-      <p className="mx-auto mt-2 max-w-md text-sm text-app-secondary">
-        Pix 已提交给外包自动支付通道，正在等待对方确认付款结果。此订单不会进入本地工人扫码队列。
-      </p>
-      {order.outsourcedPaymentStatus && (
-        <p className="mt-4 text-xs text-app-secondary">外包状态：{order.outsourcedPaymentStatus}</p>
-      )}
+      <h2 className="mt-4 text-xl font-extrabold text-app-primary">正在支付中</h2>
     </div>
   );
 }
