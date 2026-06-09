@@ -13,6 +13,7 @@ export interface AppConfig {
   pixWorkerConcurrency: number;
   paymentDetectionConcurrency: number;
   createOrderRateLimitPerMin: number;
+  enablePaymentMaintenance: boolean;
 }
 
 const HEX_64 = /^[0-9a-fA-F]{64}$/;
@@ -27,6 +28,7 @@ const TEST_DEFAULTS = {
   PIX_WORKER_CONCURRENCY: '5',
   PAYMENT_DETECTION_CONCURRENCY: '5',
   CREATE_ORDER_RATE_LIMIT_PER_MIN: '30',
+  ENABLE_PAYMENT_MAINTENANCE: 'true',
 };
 
 export function loadConfig(
@@ -49,6 +51,7 @@ export function loadConfig(
   const pixWorkerConcurrency = Number(source.PIX_WORKER_CONCURRENCY ?? 5);
   const paymentDetectionConcurrency = Number(source.PAYMENT_DETECTION_CONCURRENCY ?? 5);
   const createOrderRateLimitPerMin = Number(source.CREATE_ORDER_RATE_LIMIT_PER_MIN ?? 30);
+  const enablePaymentMaintenance = parseBoolean(source.ENABLE_PAYMENT_MAINTENANCE ?? 'true', 'ENABLE_PAYMENT_MAINTENANCE');
 
   if (!Number.isInteger(port) || port <= 0 || port > 65535) {
     throw new Error('PORT must be a valid TCP port');
@@ -85,6 +88,7 @@ export function loadConfig(
     pixWorkerConcurrency,
     paymentDetectionConcurrency,
     createOrderRateLimitPerMin,
+    enablePaymentMaintenance,
   };
 }
 
@@ -96,6 +100,12 @@ function requireEnv(env: Record<string, string | undefined>, key: string): strin
 
 function looksLikePlaceholder(value: string): boolean {
   return /change[-_ ]?me|your-|replace-|example|placeholder/i.test(value);
+}
+
+function parseBoolean(value: string, key: string): boolean {
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  throw new Error(`${key} must be true or false`);
 }
 
 export const config = process.env.NODE_ENV === 'test'

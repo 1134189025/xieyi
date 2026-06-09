@@ -114,12 +114,24 @@ export async function archiveCode(codeId: string) {
 }
 
 export async function archiveUsedCodes(filters: ArchiveUsedCodeFilters) {
-  const where = buildCodeWhere({ ...filters, status: 'used' });
+  const baseWhere = buildCodeWhere({ ...filters, status: 'used' });
+  const where = filters.archiveScope === 'archived' || filters.archiveScope === 'all'
+    ? andWhere(baseWhere, { archivedAt: null })
+    : baseWhere;
   const archived = await prisma.redemptionCode.updateMany({
     where,
     data: { archivedAt: new Date() },
   });
   return { archivedCount: archived.count };
+}
+
+export async function deleteUnusedCodes(filters: ArchiveUsedCodeFilters) {
+  const where = andWhere(
+    buildCodeWhere(filters),
+    { usedAt: null },
+  );
+  const deleted = await prisma.redemptionCode.deleteMany({ where });
+  return { deletedCount: deleted.count };
 }
 
 export async function listCodeBatches() {
@@ -166,6 +178,14 @@ function buildCodeWhere(filters: ArchiveUsedCodeFilters): Prisma.RedemptionCodeW
   }
 
   return where;
+}
+
+function andWhere(
+  left: Prisma.RedemptionCodeWhereInput,
+  right: Prisma.RedemptionCodeWhereInput,
+): Prisma.RedemptionCodeWhereInput {
+  if (Object.keys(left).length === 0) return right;
+  return { AND: [left, right] };
 }
 
 function normalizeOptionalText(value: string | null | undefined): string | undefined {

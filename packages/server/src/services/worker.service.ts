@@ -1,13 +1,44 @@
 import bcrypt from 'bcrypt';
+import type { Prisma } from '@prisma/client';
 import { prisma } from '../db.ts';
 import { AppError } from '../middleware/error-handler.ts';
 import { getShanghaiDayRange, getShanghaiWeekRange } from '../utils/shanghai-time.ts';
+
+type WorkerStatusFilter = 'all' | 'enabled' | 'disabled';
 
 type WorkerAccountUpdate = {
   enabled?: boolean;
   password?: string;
   displayName?: string;
 };
+
+interface ListWorkerFilters {
+  status?: WorkerStatusFilter;
+  search?: string;
+  page: number;
+  limit: number;
+}
+
+export interface WorkerManagementItem {
+  id: string;
+  username: string;
+  displayName: string | null;
+  enabled: boolean;
+  deletedAt: string | null;
+  completedTotal: number;
+  completedToday: number;
+  completedThisWeek: number;
+  claimedCount: number;
+  lastCompletedAt: string | null;
+  createdAt: string;
+}
+
+export interface WorkerManagementPage {
+  workers: WorkerManagementItem[];
+  total: number;
+  page: number;
+  limit: number;
+}
 
 export async function createWorkerAccount(username: string, password: string, displayName?: string) {
   const existing = await prisma.user.findUnique({ where: { username } });
@@ -29,15 +60,25 @@ export async function createWorkerAccount(username: string, password: string, di
   };
 }
 
-export async function listWorkerAccountsForManagement() {
+export function listWorkerAccountsForManagement(): Promise<WorkerManagementItem[]>;
+export function listWorkerAccountsForManagement(filters: ListWorkerFilters): Promise<WorkerManagementPage>;
+export async function listWorkerAccountsForManagement(filters?: ListWorkerFilters) {
   const shanghaiDayRange = getShanghaiDayRange(new Date());
   const shanghaiWeekRange = getShanghaiWeekRange(new Date());
-  const workers = await prisma.user.findMany({
-    where: { role: 'WORKER', deletedAt: null },
+  const where = buildWorkerWhere(filters);
+  const listQuery = prisma.user.findMany({
+    where,
     orderBy: { createdAt: 'desc' },
+    ...(filters ? {
+      skip: (filters.page - 1) * filters.limit,
+      take: filters.limit,
+    } : {}),
   });
+  const [workers, total] = filters
+    ? await Promise.all([listQuery, prisma.user.count({ where })])
+    : [await listQuery, 0];
 
-  return Promise.all(
+  const workerViews = await Promise.all(
     workers.map(async (worker) => {
       const [completedTotal, completedToday, completedThisWeek, claimedCount, lastCompleted] = await Promise.all([
         prisma.order.count({
@@ -89,6 +130,14 @@ export async function listWorkerAccountsForManagement() {
       };
     }),
   );
+
+  if (!filters) return workerViews;
+  return {
+    workers: workerViews,
+    total,
+    page: filters.page,
+    limit: filters.limit,
+  };
 }
 
 export async function updateWorkerAccount(workerId: string, data: WorkerAccountUpdate) {
@@ -154,4 +203,20 @@ async function releaseActiveWorkerClaims(client: Pick<typeof prisma, 'order'>, w
       claimExpiresAt: null,
     },
   });
+}
+
+function buildWorkerWhere(filters?: Partial<Pick<ListWorkerFilters, 'status' | 'search'>>): Prisma.UserWhereInput {
+  const where: Prisma.UserWhereInput = { role: 'WORKER', deletedAt: null };
+  if (filters?.status === 'enabled') where.enabled = true;
+  if (filters?.status === 'disabled') where.enabled = false;
+
+  const search = filters?.search?.trim();
+  if (search) {
+    where.OR = [
+      { username: { contains: search, mode: 'insensitive' } },
+      { displayName: { contains: search, mode: 'insensitive' } },
+    ];
+  }
+
+  return where;
 }

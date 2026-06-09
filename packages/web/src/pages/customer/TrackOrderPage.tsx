@@ -134,7 +134,7 @@ export default function TrackOrderPage() {
           {isCompleted && <CompletedOrder order={order} />}
           {isFailed && <FailedOrder order={order} />}
           {isCreating && <CreatingPaymentOrder queueEstimate={order.queueEstimate} />}
-          {isMinimalOutsourcedPending && <OutsourcedPendingPaymentOrder />}
+          {isMinimalOutsourcedPending && <OutsourcedPendingPaymentOrder order={order} />}
           {isPending && !isOutsourcedPayment && (
             <div className="view-section">
               <p className="checkout-lead">请让工人扫描二维码，或复制 Pix 付款码完成付款确认。</p>
@@ -162,13 +162,43 @@ export default function TrackOrderPage() {
   );
 }
 
-function OutsourcedPendingPaymentOrder() {
+function OutsourcedPendingPaymentOrder({ order }: { order: OrderData }) {
   return (
     <div className="view-section py-8 text-center">
       <Loader2 className="mx-auto h-12 w-12 animate-spin text-app-accent" />
       <h2 className="mt-4 text-xl font-extrabold text-app-primary">正在支付中</h2>
+      <p className="mx-auto mt-2 max-w-sm text-sm text-app-secondary">
+        Pix 已提交到自动支付通道，页面会自动刷新结果。请勿重复提交同一个兑换码。
+      </p>
+      <div className="mt-5 rounded-lg border border-app-border bg-[#fbfcfd] p-4 text-left text-sm">
+        <div className="flex justify-between gap-4 border-b border-app-border pb-3">
+          <span className="text-app-secondary">追踪码</span>
+          <strong className="break-all font-mono text-app-primary">{order.trackingToken}</strong>
+        </div>
+        <div className="flex justify-between gap-4 border-b border-app-border py-3">
+          <span className="text-app-secondary">创建时间</span>
+          <strong className="text-app-primary">{new Date(order.createdAt).toLocaleString('zh-CN')}</strong>
+        </div>
+        <div className="flex justify-between gap-4 pt-3">
+          <span className="text-app-secondary">当前阶段</span>
+          <strong className="text-app-primary">{outsourcedCustomerStatusLabel(order.outsourcedPaymentStatus)}</strong>
+        </div>
+      </div>
+      <p className="mx-auto mt-4 max-w-sm text-xs text-app-secondary">
+        长时间未完成时，请把追踪码发给管理员核对外包票据状态。
+      </p>
     </div>
   );
+}
+
+function outsourcedCustomerStatusLabel(status: string | null | undefined): string {
+  const normalizedStatus = status?.trim().toLowerCase();
+  if (normalizedStatus === 'queued') return '排队处理中';
+  if (normalizedStatus === 'paid') return '支付确认中';
+  if (normalizedStatus === 'failed' || normalizedStatus === 'expired' || normalizedStatus === 'canceled') {
+    return '等待系统同步';
+  }
+  return '自动支付处理中';
 }
 
 function CompletedOrder({ order }: { order: OrderData }) {
@@ -177,7 +207,7 @@ function CompletedOrder({ order }: { order: OrderData }) {
       <div className="success-icon">
         <CheckCircle />
       </div>
-      <h2 className="text-2xl font-extrabold tracking-tight text-app-primary">支付已完成</h2>
+      <h2 className="text-2xl font-extrabold text-app-primary">支付已完成</h2>
       <p className="mt-2 text-sm text-app-secondary">Pix 付款已经确认，订单状态已同步更新。</p>
       {order.completedAt && (
         <div className="mt-6 flex justify-between border-t border-app-border pt-4 text-sm">
@@ -229,7 +259,7 @@ function ClosedOrder() {
 function GenerationQueueEstimateCard({ queueEstimate }: { queueEstimate: QueueEstimate }) {
   const estimatedMinutes = Math.max(1, Math.ceil(queueEstimate.estimatedQueueSeconds / 60));
   return (
-    <div className="mt-5 rounded-2xl border border-app-border bg-[#fbfcfd] p-4 text-left shadow-sm">
+    <div className="mt-5 rounded-lg border border-app-border bg-[#fbfcfd] p-4 text-left shadow-sm">
       <div className="text-sm font-bold text-app-primary">排队 #{queueEstimate.position}</div>
       <div className="mt-3 grid grid-cols-1 gap-2 text-xs text-app-secondary sm:grid-cols-3">
         <span>前方 {queueEstimate.ordersAhead} 单</span>
@@ -247,7 +277,7 @@ function PendingQueueEstimateCard({ queueEstimate }: { queueEstimate: QueueEstim
     : `前方 ${queueEstimate.ordersAhead} 单 · 排队第 ${queueEstimate.position} 位 · 预计约 ${estimatedMinutes} 分钟`;
 
   return (
-    <div className="mb-5 rounded-2xl border border-app-border bg-[#fbfcfd] p-4 shadow-sm">
+    <div className="mb-5 rounded-lg border border-app-border bg-[#fbfcfd] p-4 shadow-sm">
       <div className="text-sm font-bold text-app-primary">{estimateText}</div>
       <div className="mt-2 text-xs text-app-secondary">
         当前待处理 {queueEstimate.pendingTotal} 单，估算时间会随队列变化自动刷新。

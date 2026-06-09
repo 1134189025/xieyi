@@ -38,6 +38,7 @@ model User {
   updatedAt    DateTime @updatedAt @map("updated_at")
 
   createdCodes    RedemptionCode[] @relation("CreatedBy")
+  createdOutsourcedActivationCodes OutsourcedActivationCode[] @relation("OutsourcedActivationCodeCreatedBy")
   claimedOrders   Order[]          @relation("ClaimedBy")
   completedOrders Order[]          @relation("CompletedBy")
 
@@ -62,6 +63,33 @@ model RedemptionCode {
   @@index([batchLabel, usedAt, archivedAt, createdAt])
   @@index([archivedAt])
   @@map("redemption_codes")
+}
+
+model OutsourcedActivationCode {
+  id               String    @id @default(uuid())
+  codeHash         String    @unique @map("code_hash")
+  encryptedCode    String    @map("encrypted_code")
+  maskedCode       String    @map("masked_code")
+  batchLabel       String?   @map("batch_label")
+  lastRemaining    Int?      @map("last_remaining")
+  lastTotal        Int?      @map("last_total")
+  lastUsed         Int?      @map("last_used")
+  localSubmitCount Int       @default(0) @map("local_submit_count")
+  lastCheckedAt    DateTime? @map("last_checked_at")
+  lastError        String?   @map("last_error")
+  exhaustedAt      DateTime? @map("exhausted_at")
+  archivedAt       DateTime? @map("archived_at")
+  createdById      String?   @map("created_by_id")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  createdBy User?  @relation("OutsourcedActivationCodeCreatedBy", fields: [createdById], references: [id])
+  orders    Order[] @relation("OutsourcedActivationCodeOrders")
+
+  @@index([batchLabel, archivedAt, createdAt])
+  @@index([archivedAt, exhaustedAt, createdAt])
+  @@index([lastRemaining])
+  @@map("outsourced_activation_codes")
 }
 
 model Order {
@@ -90,6 +118,7 @@ model Order {
   generationErrorDetail String?     @map("generation_error_detail")
   generationErrorHttpStatus Int?    @map("generation_error_http_status")
   submittedRedemptionCode String?  @map("submitted_redemption_code")
+  outsourcedActivationCodeId String? @map("outsourced_activation_code_id")
   outsourcedTicketId   String?      @map("outsourced_ticket_id")
   outsourcedPaymentStatus String?    @map("outsourced_payment_status")
   outsourcedLastError  String?      @map("outsourced_last_error")
@@ -104,6 +133,7 @@ model Order {
   updatedAt            DateTime    @updatedAt @map("updated_at")
 
   redemptionCode RedemptionCode? @relation(fields: [redemptionCodeId], references: [id])
+  outsourcedActivationCode OutsourcedActivationCode? @relation("OutsourcedActivationCodeOrders", fields: [outsourcedActivationCodeId], references: [id])
   claimedBy      User?          @relation("ClaimedBy", fields: [claimedById], references: [id])
   completedBy    User?          @relation("CompletedBy", fields: [completedById], references: [id])
 
@@ -114,6 +144,7 @@ model Order {
   @@index([status, generationQueuedAt, id])
   @@index([paymentHandler, status, createdAt, id])
   @@index([outsourcedTicketId])
+  @@index([outsourcedActivationCodeId])
   @@index([generationFinishedAt])
   @@index([claimedById])
   @@index([status, claimedById, claimExpiresAt, createdAt, id])

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Loader2, Save } from 'lucide-react';
 import api from '../../api/client';
@@ -65,8 +66,6 @@ export default function ProxySettingsPage() {
   const [outsourcedBuyerApiBaseUrl, setOutsourcedBuyerApiBaseUrl] = useState(
     EMPTY_PAYMENT_PROCESSING_SETTING.outsourcedBuyerApiBaseUrl,
   );
-  const [outsourcedActivationCodePool, setOutsourcedActivationCodePool] = useState('');
-  const [clearOutsourcedActivationCodes, setClearOutsourcedActivationCodes] = useState(false);
   const [chatGptProxyPool, setChatGptProxyPool] = useState('');
   const [stripeProxyPool, setStripeProxyPool] = useState('');
   const [loading, setLoading] = useState(true);
@@ -95,8 +94,6 @@ export default function ProxySettingsPage() {
       if (!options.silent) {
         setPaymentHandler(nextPaymentProcessing.handler);
         setOutsourcedBuyerApiBaseUrl(nextPaymentProcessing.outsourcedBuyerApiBaseUrl);
-        setOutsourcedActivationCodePool('');
-        setClearOutsourcedActivationCodes(false);
       }
       setError('');
     } catch {
@@ -150,28 +147,25 @@ export default function ProxySettingsPage() {
 
   const savePaymentProcessing = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (paymentHandler === 'OUTSOURCED_BUYER_API' && paymentProcessing.outsourcedActivationCodeCount <= 0) {
+      toast.error('请先导入外包兑换码，再开启外包自动支付');
+      return;
+    }
+
     setSavingPaymentProcessing(true);
     try {
       const payload: {
         handler: PaymentHandler;
         outsourcedBuyerApiBaseUrl: string;
-        outsourcedActivationCodePool?: string | null;
       } = {
         handler: paymentHandler,
         outsourcedBuyerApiBaseUrl: outsourcedBuyerApiBaseUrl.trim(),
       };
-      if (outsourcedActivationCodePool.trim()) {
-        payload.outsourcedActivationCodePool = outsourcedActivationCodePool.trim();
-      } else if (clearOutsourcedActivationCodes) {
-        payload.outsourcedActivationCodePool = null;
-      }
 
       const response = await api.put('/admin/settings/payment-processing', payload);
       setPaymentProcessing(response.data);
       setPaymentHandler(response.data.handler);
       setOutsourcedBuyerApiBaseUrl(response.data.outsourcedBuyerApiBaseUrl);
-      setOutsourcedActivationCodePool('');
-      setClearOutsourcedActivationCodes(false);
       toast.success('付款处理方式已保存');
     } catch (err: unknown) {
       toast.error(safeErrorMessage(err, '保存付款处理方式失败'));
@@ -207,12 +201,12 @@ export default function ProxySettingsPage() {
           <Loader2 className="h-8 w-8 animate-spin text-app-accent" />
         </div>
       ) : error ? (
-        <div className="rounded-xl border border-app-border bg-app-surface p-10 text-center text-app-secondary shadow-checkout">
+        <div className="rounded-lg border border-app-border bg-app-surface p-10 text-center text-app-secondary shadow-checkout">
           {error}
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
-          <form onSubmit={saveProxyPools} className="rounded-xl border border-app-border bg-app-surface p-4 shadow-checkout sm:p-6 xl:col-span-2">
+          <form onSubmit={saveProxyPools} className="rounded-lg border border-app-border bg-app-surface p-4 shadow-checkout sm:p-6 xl:col-span-2">
             <h3 className="mb-4 text-lg font-semibold">代理池</h3>
             <ProxyPoolTextarea
               title="ChatGPT 代理池"
@@ -243,13 +237,9 @@ export default function ProxySettingsPage() {
             setting={paymentProcessing}
             handler={paymentHandler}
             apiBaseUrl={outsourcedBuyerApiBaseUrl}
-            activationCodePool={outsourcedActivationCodePool}
-            clearActivationCodes={clearOutsourcedActivationCodes}
             saving={savingPaymentProcessing}
             onHandlerChange={setPaymentHandler}
             onApiBaseUrlChange={setOutsourcedBuyerApiBaseUrl}
-            onActivationCodePoolChange={setOutsourcedActivationCodePool}
-            onClearActivationCodesChange={setClearOutsourcedActivationCodes}
             onSubmit={savePaymentProcessing}
           />
 
@@ -282,29 +272,21 @@ function PaymentProcessingCard({
   setting,
   handler,
   apiBaseUrl,
-  activationCodePool,
-  clearActivationCodes,
   saving,
   onHandlerChange,
   onApiBaseUrlChange,
-  onActivationCodePoolChange,
-  onClearActivationCodesChange,
   onSubmit,
 }: {
   setting: PaymentProcessingSetting;
   handler: PaymentHandler;
   apiBaseUrl: string;
-  activationCodePool: string;
-  clearActivationCodes: boolean;
   saving: boolean;
   onHandlerChange: (handler: PaymentHandler) => void;
   onApiBaseUrlChange: (value: string) => void;
-  onActivationCodePoolChange: (value: string) => void;
-  onClearActivationCodesChange: (value: boolean) => void;
   onSubmit: (event: React.FormEvent) => void;
 }) {
   return (
-    <form onSubmit={onSubmit} className="rounded-xl border border-app-border bg-app-surface p-4 shadow-checkout sm:p-6 xl:col-span-3">
+    <form onSubmit={onSubmit} className="rounded-lg border border-app-border bg-app-surface p-4 shadow-checkout sm:p-6 xl:col-span-3">
       <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
         <div>
           <h3 className="text-lg font-semibold">付款处理方式</h3>
@@ -346,38 +328,24 @@ function PaymentProcessingCard({
           <p className="mt-2 text-xs text-app-secondary">保存时只接受 http/https 地址；填写 /buyer 会自动规整到站点根地址。</p>
         </div>
 
-        <div>
-          <label className="mb-1 block text-sm font-medium text-app-primary">外包激活码池</label>
-          <textarea
-            value={activationCodePool}
-            onChange={(event) => {
-              onActivationCodePoolChange(event.target.value);
-              if (event.target.value.trim()) onClearActivationCodesChange(false);
-            }}
-            placeholder="每行一个外包激活码；留空保存会保留现有码池"
-            rows={4}
-            autoComplete="off"
-            spellCheck={false}
-            className="w-full rounded-lg border border-app-border px-3 py-2 font-mono text-sm outline-none focus:border-app-accent"
-          />
-          <label className="mt-2 flex items-center gap-2 text-xs text-app-secondary">
-            <input
-              type="checkbox"
-              checked={clearActivationCodes}
-              disabled={Boolean(activationCodePool.trim())}
-              onChange={(event) => onClearActivationCodesChange(event.target.checked)}
-              className="h-4 w-4 rounded border-app-border"
-            />
-            清空已保存外包码池
-          </label>
+        <div className="rounded-lg border border-app-border bg-neutral-50 p-4">
+          <div className="text-sm font-medium text-app-primary">外包兑换码</div>
+          <p className="mt-2 text-sm text-app-secondary">
+            当前未归档外包兑换码 {setting.outsourcedActivationCodeCount} 个。导入、刷新剩余额度、删除和归档请到独立管理页操作。
+          </p>
+          {setting.outsourcedActivationCodePreview.length > 0 && (
+            <p className="mt-2 text-xs text-app-secondary">
+              脱敏预览：{setting.outsourcedActivationCodePreview.join('、')}
+            </p>
+          )}
+          <Link
+            to="/admin/outsourced-activation-codes"
+            className="mt-3 inline-flex rounded-lg bg-neutral-900 px-3 py-2 text-sm text-white hover:bg-neutral-700"
+          >
+            去管理外包兑换码
+          </Link>
         </div>
       </div>
-
-      {setting.outsourcedActivationCodePreview.length > 0 && (
-        <div className="mt-4 rounded-lg bg-neutral-50 p-3 text-xs text-app-secondary">
-          脱敏预览：{setting.outsourcedActivationCodePreview.join('、')}
-        </div>
-      )}
 
       <button
         type="submit"
@@ -406,7 +374,7 @@ function PaymentHandlerButton({
     <button
       type="button"
       onClick={onClick}
-      className={`rounded-xl border p-4 text-left transition ${
+      className={`rounded-lg border p-4 text-left transition ${
         active
           ? 'border-app-accent bg-app-accent/10 text-app-primary'
           : 'border-app-border bg-white text-app-secondary hover:border-app-accent'
@@ -445,7 +413,7 @@ function ProxyPoolTextarea({
 
 function ProxyPoolStatus({ title, setting }: { title: string; setting: ProxyPoolSetting }) {
   return (
-    <div className="rounded-xl border border-app-border bg-app-surface p-4 shadow-checkout sm:p-6">
+    <div className="rounded-lg border border-app-border bg-app-surface p-4 shadow-checkout sm:p-6">
       <h3 className="mb-4 text-lg font-semibold">{title}</h3>
       {setting.proxies.length === 0 ? (
         <p className="text-sm text-app-secondary">未配置</p>
@@ -483,7 +451,7 @@ function SettingToggleCard({
   onToggle: () => void;
 }) {
   return (
-    <div className="rounded-xl border border-app-border bg-app-surface p-4 shadow-checkout sm:p-6 xl:col-span-3">
+    <div className="rounded-lg border border-app-border bg-app-surface p-4 shadow-checkout sm:p-6 xl:col-span-3">
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
           <h3 className="text-lg font-semibold">{title}</h3>

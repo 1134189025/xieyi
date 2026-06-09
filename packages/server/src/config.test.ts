@@ -13,6 +13,7 @@ const validEnv = {
   PIX_WORKER_CONCURRENCY: '5',
   PAYMENT_DETECTION_CONCURRENCY: '5',
   CREATE_ORDER_RATE_LIMIT_PER_MIN: '30',
+  ENABLE_PAYMENT_MAINTENANCE: 'true',
 };
 
 describe('loadConfig', () => {
@@ -42,6 +43,7 @@ describe('loadConfig', () => {
       pixWorkerConcurrency: 5,
       paymentDetectionConcurrency: 5,
       createOrderRateLimitPerMin: 30,
+      enablePaymentMaintenance: true,
       port: 3000,
     });
   });
@@ -49,6 +51,12 @@ describe('loadConfig', () => {
   it('拒绝非法自动检测并发配置', () => {
     expect(() => loadConfig({ ...validEnv, PAYMENT_DETECTION_CONCURRENCY: '0' })).toThrow(
       /PAYMENT_DETECTION_CONCURRENCY/,
+    );
+  });
+
+  it('拒绝非法维护循环开关配置', () => {
+    expect(() => loadConfig({ ...validEnv, ENABLE_PAYMENT_MAINTENANCE: 'yes' })).toThrow(
+      /ENABLE_PAYMENT_MAINTENANCE/,
     );
   });
 });

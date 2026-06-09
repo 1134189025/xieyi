@@ -7,15 +7,19 @@ const prisma = {
 };
 
 const getPaymentProcessingConfig = vi.fn();
+const selectAvailableOutsourcedActivationCode = vi.fn();
 const completeOutsourcedPaymentOrder = vi.fn();
 const failOutsourcedPaymentOrder = vi.fn();
+const decrypt = vi.fn((ciphertext: string) => ciphertext.replace(/^encrypted:/, ''));
 
 vi.mock('../db.ts', () => ({ prisma }));
 vi.mock('./settings.service.ts', () => ({ getPaymentProcessingConfig }));
+vi.mock('./outsourced-activation-code.service.ts', () => ({ selectAvailableOutsourcedActivationCode }));
 vi.mock('./order.service.ts', () => ({
   completeOutsourcedPaymentOrder,
   failOutsourcedPaymentOrder,
 }));
+vi.mock('../utils/crypto.ts', () => ({ decrypt }));
 
 const {
   OutsourcedBuyerApiError,
@@ -31,35 +35,23 @@ describe('outsourced-payment.service', () => {
     getPaymentProcessingConfig.mockResolvedValue({
       handler: 'OUTSOURCED_BUYER_API',
       outsourcedBuyerApiBaseUrl: 'https://scan.amazo.indevs.in',
-      outsourcedActivationCodes: ['DP-FIRST-CODE', 'DP-SECOND-CODE'],
+      outsourcedActivationCodes: [],
+    });
+    selectAvailableOutsourcedActivationCode.mockResolvedValue({
+      id: 'activation-code-1',
+      code: 'DP-FIRST-CODE',
+      maskedCode: 'DP-F...ODE',
     });
   });
 
-  it('selects the first outsourced activation code with remaining quota', async () => {
-    (fetch as unknown as ReturnType<typeof vi.fn>)
-      .mockResolvedValueOnce(jsonResponse({ ok: false, message: '激活码不存在或已停用' }))
-      .mockResolvedValueOnce(jsonResponse({ ok: true, remaining: 2, total: 3, used: 1, held: 0 }));
-
-    await expect(selectOutsourcedActivationCode()).resolves.toBe('DP-SECOND-CODE');
-
-    expect(fetch).toHaveBeenCalledWith(
-      'https://scan.amazo.indevs.in/buyer/api/code-info',
-      expect.objectContaining({
-        method: 'POST',
-        body: JSON.stringify({ code: 'DP-FIRST-CODE' }),
-      }),
-    );
-  });
-
-  it('throws a terminal error when no outsourced activation code has quota', async () => {
-    (fetch as unknown as ReturnType<typeof vi.fn>)
-      .mockResolvedValueOnce(jsonResponse({ ok: true, remaining: 0, total: 1, used: 1, held: 0 }))
-      .mockResolvedValueOnce(jsonResponse({ ok: false, message: '已停用' }));
-
-    await expect(selectOutsourcedActivationCode()).rejects.toMatchObject({
-      code: 'OUTSOURCED_CODE_UNAVAILABLE',
-      statusCode: 503,
+  it('selects an outsourced activation code from the managed table', async () => {
+    await expect(selectOutsourcedActivationCode()).resolves.toEqual({
+      id: 'activation-code-1',
+      code: 'DP-FIRST-CODE',
+      maskedCode: 'DP-F...ODE',
     });
+
+    expect(selectAvailableOutsourcedActivationCode).toHaveBeenCalledWith('https://scan.amazo.indevs.in');
   });
 
   it('submits pix code to buyer API and returns the external ticket', async () => {
@@ -88,7 +80,7 @@ describe('outsourced-payment.service', () => {
     );
   });
 
-  it('polls outsourced pending orders and maps paid and failed terminal statuses', async () => {
+  it('polls outsourced pending orders and maps normalized terminal statuses', async () => {
     prisma.order.findMany.mockResolvedValue([
       { id: 'order-paid', outsourcedTicketId: 'Tpaid' },
       { id: 'order-failed', outsourcedTicketId: 'Tfailed' },
@@ -97,8 +89,8 @@ describe('outsourced-payment.service', () => {
     (fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce(jsonResponse({
       ok: true,
       orders: [
-        { ticket_id: 'Tpaid', status: 'paid', last_error: '', paid_at: '2026-06-01T00:00:00' },
-        { ticket_id: 'Tfailed', status: 'failed', last_error: '外包支付失败' },
+        { ticket_id: 'Tpaid', status: 'PAID', last_error: '', paid_at: '2026-06-01T00:00:00' },
+        { ticket_id: 'Tfailed', status: 'Failed', last_error: '外包支付失败' },
         { ticket_id: 'Tqueued', status: 'authorizing', last_error: '' },
       ],
     }));
@@ -112,6 +104,127 @@ describe('outsourced-payment.service', () => {
     expect(completeOutsourcedPaymentOrder).toHaveBeenCalledWith('order-paid', 'paid');
     expect(failOutsourcedPaymentOrder).toHaveBeenCalledWith('order-failed', 'failed', '外包支付失败');
     expect(completeOutsourcedPaymentOrder).not.toHaveBeenCalledWith('order-queued', expect.anything());
+  });
+
+  it('redacts activation code and pix payload from outsourced status terminal errors', async () => {
+    prisma.order.findMany.mockResolvedValue([{
+      id: 'order-failed',
+      outsourcedTicketId: 'Tfailed',
+      pixCode: '000201abcdefghijklmnopqrstuvwxyz1234567890pix',
+      outsourcedActivationCode: { encryptedCode: 'encrypted:DP-FIRST-CODE' },
+    }]);
+    (fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce(jsonResponse({
+      ok: true,
+      orders: [{
+        ticket_id: 'Tfailed',
+        status: 'failed',
+        last_error: 'DP-FIRST-CODE failed for 000201abcdefghijklmnopqrstuvwxyz1234567890pix',
+      }],
+    }));
+
+    await expect(detectOutsourcedPixPayments()).resolves.toEqual({
+      checked: 1,
+      completed: 0,
+      failed: 1,
+    });
+
+    const safeLastError = failOutsourcedPaymentOrder.mock.calls[0][2];
+    expect(safeLastError).toContain('[redacted-activation-code]');
+    expect(safeLastError).toContain('[redacted-pix-code]');
+    expect(safeLastError).not.toContain('DP-FIRST-CODE');
+    expect(safeLastError).not.toContain('000201abcdefghijklmnopqrstuvwxyz1234567890pix');
+    expect(decrypt).toHaveBeenCalledWith('encrypted:DP-FIRST-CODE');
+  });
+
+  it('redacts activation code context from outsourced status HTTP failures', async () => {
+    prisma.order.findMany.mockResolvedValue([
+      {
+        id: 'order-1',
+        outsourcedTicketId: 'Tone',
+        pixCode: null,
+        outsourcedActivationCode: { encryptedCode: 'encrypted:DP-FIRST-CODE' },
+      },
+      {
+        id: 'order-2',
+        outsourcedTicketId: 'Ttwo',
+        pixCode: null,
+        outsourcedActivationCode: { encryptedCode: 'encrypted:DP-SECOND-CODE' },
+      },
+    ]);
+    (fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce(jsonResponse({
+      message: 'status failed for DP-FIRST-CODE and DP-SECOND-CODE',
+    }, { ok: false, status: 503 }));
+
+    const promise = detectOutsourcedPixPayments();
+
+    await expect(promise).rejects.toMatchObject({
+      code: 'OUTSOURCED_API_UNAVAILABLE',
+      generationFailureDiagnostic: {
+        httpStatus: 503,
+        detail: expect.stringContaining('[redacted-activation-code]'),
+      },
+    });
+    await expect(promise).rejects.toMatchObject({
+      generationFailureDiagnostic: {
+        detail: expect.not.stringContaining('DP-FIRST-CODE'),
+      },
+    });
+    await expect(promise).rejects.toMatchObject({
+      generationFailureDiagnostic: {
+        detail: expect.not.stringContaining('DP-SECOND-CODE'),
+      },
+    });
+  });
+
+  it('redacts pix payload from outsourced status terminal errors even when the order no longer stores pixCode', async () => {
+    prisma.order.findMany.mockResolvedValue([{
+      id: 'order-failed',
+      outsourcedTicketId: 'Tfailed',
+      pixCode: null,
+      outsourcedActivationCode: { encryptedCode: 'encrypted:DP-FIRST-CODE' },
+    }]);
+    (fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce(jsonResponse({
+      ok: true,
+      orders: [{
+        ticket_id: 'Tfailed',
+        status: 'failed',
+        last_error: 'failed for 000201abcdefghijklmnopqrstuvwxyz1234567890pix',
+      }],
+    }));
+
+    await expect(detectOutsourcedPixPayments()).resolves.toEqual({
+      checked: 1,
+      completed: 0,
+      failed: 1,
+    });
+
+    const safeLastError = failOutsourcedPaymentOrder.mock.calls[0][2];
+    expect(safeLastError).toContain('[redacted-pix-code]');
+    expect(safeLastError).not.toContain('000201abcdefghijklmnopqrstuvwxyz1234567890pix');
+  });
+
+  it('skips overlapping outsourced detection runs', async () => {
+    let releaseFindMany: (value: unknown[]) => void = () => undefined;
+    prisma.order.findMany.mockReturnValueOnce(new Promise((resolve) => {
+      releaseFindMany = resolve;
+    }));
+
+    const firstRun = detectOutsourcedPixPayments();
+    await Promise.resolve();
+
+    await expect(detectOutsourcedPixPayments()).resolves.toEqual({
+      checked: 0,
+      completed: 0,
+      failed: 0,
+    });
+    expect(prisma.order.findMany).toHaveBeenCalledTimes(1);
+
+    releaseFindMany([]);
+    await expect(firstRun).resolves.toEqual({
+      checked: 0,
+      completed: 0,
+      failed: 0,
+    });
   });
 
   it('redacts pix payload and activation code from buyer API errors', async () => {
@@ -132,17 +245,35 @@ describe('outsourced-payment.service', () => {
         detail: expect.stringContaining('[redacted-pix-code]'),
       },
     });
+    await expect(promise).rejects.toMatchObject({
+      generationFailureDiagnostic: {
+        detail: expect.not.stringContaining('DP-FIRST-CODE'),
+      },
+    });
   });
 
-  it('treats non-2xx buyer API responses as external API failures', async () => {
+  it('treats non-2xx buyer API responses as external API failures without leaking secrets', async () => {
     (fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
-      jsonResponse({ message: 'service unavailable' }, { ok: false, status: 503 }),
+      jsonResponse({
+        message: 'service unavailable for DP-FIRST-CODE and 000201abcdefghijklmnopqrstuvwxyz1234567890pix',
+      }, { ok: false, status: 503 }),
     );
 
-    await expect(selectOutsourcedActivationCode()).rejects.toMatchObject({
+    const promise = submitOutsourcedPixPayment({
+      activationCode: 'DP-FIRST-CODE',
+      pixCode: '000201abcdefghijklmnopqrstuvwxyz1234567890pix',
+    });
+
+    await expect(promise).rejects.toMatchObject({
       code: 'OUTSOURCED_API_UNAVAILABLE',
       generationFailureDiagnostic: {
         httpStatus: 503,
+        detail: expect.stringContaining('[redacted-activation-code]'),
+      },
+    });
+    await expect(promise).rejects.toMatchObject({
+      generationFailureDiagnostic: {
+        detail: expect.not.stringContaining('000201abcdefghijklmnopqrstuvwxyz1234567890pix'),
       },
     });
   });

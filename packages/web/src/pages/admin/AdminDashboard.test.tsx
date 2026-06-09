@@ -96,6 +96,8 @@ describe('AdminDashboard', () => {
     expect(container.textContent).toContain('总已完成');
     expect(container.textContent).toContain('今日已完成');
     expect(container.textContent).toContain('本周已完成');
+    expect(container.textContent).toContain('本地兑换码');
+    expect(container.textContent).toContain('未用本地码');
     expect(container.textContent).toContain('队列等待');
     expect(container.textContent).toContain('处理中');
     expect(container.textContent).toContain('失败任务');

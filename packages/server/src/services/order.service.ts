@@ -760,12 +760,20 @@ export async function getWorkerSummary(workerId: string) {
 
 export async function getAdminOrders(filters: {
   status?: string;
+  paymentHandler?: PaymentHandler;
+  trackingToken?: string;
   page: number;
   limit: number;
 }) {
   const where: Record<string, unknown> = {};
   if (filters.status) {
     where.status = filters.status;
+  }
+  if (filters.paymentHandler) {
+    where.paymentHandler = filters.paymentHandler;
+  }
+  if (filters.trackingToken) {
+    where.trackingToken = { contains: filters.trackingToken, mode: 'insensitive' };
   }
 
   const [orders, total] = await Promise.all([
@@ -817,13 +825,29 @@ export async function cancelOrder(orderId: string) {
     where: {
       id: orderId,
       status: { in: ['CREATING_PAYMENT', 'PENDING_PAYMENT', 'FAILED', 'EXPIRED'] },
-    },
+      OR: [
+        { status: { not: 'PENDING_PAYMENT' } },
+        { paymentHandler: { not: 'OUTSOURCED_BUYER_API' } },
+        { outsourcedTicketId: null },
+      ],
+    } as never,
     data: { status: 'CANCELLED' },
   });
 
   if (changed.count === 0) {
     const order = await prisma.order.findUnique({ where: { id: orderId } });
     if (!order) throw new AppError(404, 'Order not found');
+    if (
+      order.status === 'PENDING_PAYMENT'
+      && (order as OrderWithGeneration).paymentHandler === 'OUTSOURCED_BUYER_API'
+      && (order as OrderWithGeneration).outsourcedTicketId
+    ) {
+      throw new AppError(
+        409,
+        '已有外包票据的订单不能直接取消，请等待外包支付返回终态后再处理',
+        'OUTSOURCED_ORDER_CANCEL_BLOCKED',
+      );
+    }
     throw new AppError(409, `Order is ${order.status}, cannot cancel`);
   }
 

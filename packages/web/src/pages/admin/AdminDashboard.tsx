@@ -72,7 +72,7 @@ interface FetchDashboardOptions {
 }
 
 export default function AdminDashboard() {
-  const [data, setData] = useState<DashboardData | null>(null);
+  const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -82,7 +82,7 @@ export default function AdminDashboard() {
     }
     try {
       const res = await api.get('/admin/dashboard');
-      setData(res.data);
+      setDashboardData(res.data);
       setError('');
     } catch {
       if (!options.silent) {
@@ -101,7 +101,7 @@ export default function AdminDashboard() {
 
   useAutoRefresh(() => fetchDashboard({ silent: true }), AUTO_REFRESH_INTERVAL_MS);
 
-  if (loading || !data) {
+  if (loading || !dashboardData) {
     return (
       <Layout>
         <div className="flex justify-center py-20">
@@ -112,14 +112,14 @@ export default function AdminDashboard() {
   }
 
   const statCards = [
-    { label: '订单总数', value: data.totals.totalOrders, icon: ShoppingCart, color: 'bg-neutral-950' },
-    { label: '待支付', value: data.totals.pendingOrders, icon: Clock, color: 'bg-amber-600' },
-    { label: '总已完成', value: data.totals.completedTotal, icon: CheckCircle, color: 'bg-emerald-700' },
-    { label: '今日已完成', value: data.totals.completedToday, icon: CalendarDays, color: 'bg-sky-700' },
-    { label: '本周已完成', value: data.totals.completedThisWeek, icon: CalendarDays, color: 'bg-cyan-700' },
-    { label: '失败订单', value: data.totals.failedOrders, icon: AlertTriangle, color: 'bg-red-600' },
-    { label: '兑换码总数', value: data.totals.totalCodes, icon: Ticket, color: 'bg-neutral-800' },
-    { label: '未使用兑换码', value: data.totals.unusedCodes, icon: Ticket, color: 'bg-neutral-700' },
+    { label: '订单总数', value: dashboardData.totals.totalOrders, icon: ShoppingCart, color: 'bg-neutral-950' },
+    { label: '待支付', value: dashboardData.totals.pendingOrders, icon: Clock, color: 'bg-amber-600' },
+    { label: '总已完成', value: dashboardData.totals.completedTotal, icon: CheckCircle, color: 'bg-emerald-700' },
+    { label: '今日已完成', value: dashboardData.totals.completedToday, icon: CalendarDays, color: 'bg-sky-700' },
+    { label: '本周已完成', value: dashboardData.totals.completedThisWeek, icon: CalendarDays, color: 'bg-cyan-700' },
+    { label: '失败订单', value: dashboardData.totals.failedOrders, icon: AlertTriangle, color: 'bg-red-600' },
+    { label: '本地兑换码', value: dashboardData.totals.totalCodes, icon: Ticket, color: 'bg-neutral-800' },
+    { label: '未用本地码', value: dashboardData.totals.unusedCodes, icon: Ticket, color: 'bg-neutral-700' },
   ];
 
   return (
@@ -130,7 +130,7 @@ export default function AdminDashboard() {
         {statCards.map((card) => {
           const Icon = card.icon;
           return (
-            <div key={card.label} className="rounded-xl border border-app-border bg-app-surface p-4 shadow-checkout">
+            <div key={card.label} className="rounded-lg border border-app-border bg-app-surface p-4 shadow-checkout">
               <div className="flex items-center gap-3">
                 <div className={`rounded-lg p-2 ${card.color} text-white`}>
                   <Icon size={18} />
@@ -146,33 +146,33 @@ export default function AdminDashboard() {
       </div>
 
       <div className="mb-8 grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <QueueMetricCard label="队列等待" value={data.queue.waitingCount + data.queue.delayedCount} />
-        <QueueMetricCard label="处理中" value={data.queue.activeCount} />
-        <QueueMetricCard label="失败任务" value={data.queue.failedCount} />
+        <QueueMetricCard label="队列等待" value={dashboardData.queue.waitingCount + dashboardData.queue.delayedCount} />
+        <QueueMetricCard label="处理中" value={dashboardData.queue.activeCount} />
+        <QueueMetricCard label="失败任务" value={dashboardData.queue.failedCount} />
       </div>
 
       <div className="mb-8 grid grid-cols-1 gap-4 lg:grid-cols-3">
         <OperationalNote
-          title={`最老等待 ${formatMinutes(data.queue.oldestWaitingSeconds)} 分钟`}
-          body={`生成并发 ${data.queue.pixWorkerConcurrency}，检测并发 ${data.queue.paymentDetectionConcurrency}，平均生成耗时 ${formatSeconds(data.queue.averageGenerationSeconds)}，近 1 小时成功率 ${data.queue.successRateLastHour}%`}
+          title={`最老等待 ${formatMinutes(dashboardData.queue.oldestWaitingSeconds)} 分钟`}
+          body={`生成并发 ${dashboardData.queue.pixWorkerConcurrency}，检测并发 ${dashboardData.queue.paymentDetectionConcurrency}，平均生成耗时 ${formatSeconds(dashboardData.queue.averageGenerationSeconds)}，近 1 小时成功率 ${dashboardData.queue.successRateLastHour}%`}
         />
-        <ProxyHealthCard title="ChatGPT 代理" health={data.proxyHealth.chatGpt} />
-        <ProxyHealthCard title="Stripe 代理" health={data.proxyHealth.stripe} />
+        <ProxyHealthCard title="ChatGPT 代理" health={dashboardData.proxyHealth.chatGpt} />
+        <ProxyHealthCard title="Stripe 代理" health={dashboardData.proxyHealth.stripe} />
       </div>
 
-      <div className="mb-8 rounded-xl border border-app-border bg-app-surface p-4 shadow-checkout sm:p-6">
+      <div className="mb-8 rounded-lg border border-app-border bg-app-surface p-4 shadow-checkout sm:p-6">
         <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <h3 className="text-lg font-semibold">工人绩效</h3>
             <p className="text-sm text-app-secondary">
-              启用工人 {data.workerPerformance.enabledWorkers} / {data.workerPerformance.totalWorkers}
+              启用工人 {dashboardData.workerPerformance.enabledWorkers} / {dashboardData.workerPerformance.totalWorkers}
             </p>
           </div>
           <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
-            <span>已领取 {data.workerPerformance.claimedOrders}</span>
-            <span>未领取 {data.workerPerformance.unclaimedPendingOrders}</span>
-            <span>归属今日 {data.workerPerformance.assignedCompletedToday}</span>
-            <span>未归属今日 {data.workerPerformance.unassignedCompletedToday}</span>
+            <span>已领取 {dashboardData.workerPerformance.claimedOrders}</span>
+            <span>未领取 {dashboardData.workerPerformance.unclaimedPendingOrders}</span>
+            <span>归属今日 {dashboardData.workerPerformance.assignedCompletedToday}</span>
+            <span>未归属今日 {dashboardData.workerPerformance.unassignedCompletedToday}</span>
           </div>
         </div>
         <div className="overflow-x-auto">
@@ -187,7 +187,7 @@ export default function AdminDashboard() {
               </tr>
             </thead>
             <tbody className="divide-y divide-app-border">
-              {data.workerPerformance.topWorkers.map((worker) => (
+              {dashboardData.workerPerformance.topWorkers.map((worker) => (
                 <tr key={worker.id}>
                   <td className="px-4 py-2">{worker.displayName ?? worker.username}</td>
                   <td className="px-4 py-2">今日 {worker.completedToday} 单</td>
@@ -201,10 +201,10 @@ export default function AdminDashboard() {
         </div>
       </div>
 
-      <div className="rounded-xl border border-app-border bg-app-surface p-4 shadow-checkout sm:p-6">
+      <div className="rounded-lg border border-app-border bg-app-surface p-4 shadow-checkout sm:p-6">
         <h3 className="mb-4 text-lg font-semibold">近 30 天趋势</h3>
         <ResponsiveContainer width="100%" height={300}>
-          <LineChart data={data.dailyTrend}>
+          <LineChart data={dashboardData.dailyTrend}>
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis dataKey="date" tick={{ fontSize: 12 }} />
             <YAxis />
@@ -221,7 +221,7 @@ export default function AdminDashboard() {
 
 function QueueMetricCard({ label, value }: { label: string; value: number }) {
   return (
-    <div className="rounded-xl border border-app-border bg-app-surface p-4 shadow-checkout">
+    <div className="rounded-lg border border-app-border bg-app-surface p-4 shadow-checkout">
       <div className="flex items-center gap-3">
         <div className="rounded-lg bg-indigo-700 p-2 text-white">
           <Activity size={18} />
@@ -237,7 +237,7 @@ function QueueMetricCard({ label, value }: { label: string; value: number }) {
 
 function OperationalNote({ title, body }: { title: string; body: string }) {
   return (
-    <div className="rounded-xl border border-app-border bg-app-surface p-4 shadow-checkout">
+    <div className="rounded-lg border border-app-border bg-app-surface p-4 shadow-checkout">
       <p className="font-semibold text-app-primary">{title}</p>
       <p className="mt-2 text-sm text-app-secondary">{body}</p>
     </div>
@@ -246,7 +246,7 @@ function OperationalNote({ title, body }: { title: string; body: string }) {
 
 function ProxyHealthCard({ title, health }: { title: string; health: ProxyHealthGroup }) {
   return (
-    <div className="rounded-xl border border-app-border bg-app-surface p-4 shadow-checkout">
+    <div className="rounded-lg border border-app-border bg-app-surface p-4 shadow-checkout">
       <p className="font-semibold text-app-primary">{title}</p>
       <p className="mt-2 text-sm text-app-secondary">
         健康 {health.healthy} / 总数 {health.total}，冷却 {health.coolingDown}
