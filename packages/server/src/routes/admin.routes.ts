@@ -5,9 +5,21 @@ import {
   archiveUsedCodes,
   batchCreateCodes,
   deleteCode,
+  deleteUnusedCodes,
   listCodeBatches,
   listCodes,
 } from '../services/redemption-code.service.ts';
+import {
+  archiveOutsourcedActivationCodes,
+  archiveOutsourcedActivationCode,
+  deleteUnusedOutsourcedActivationCodes,
+  deleteOutsourcedActivationCode,
+  importOutsourcedActivationCodes,
+  listOutsourcedActivationCodeBatches,
+  listOutsourcedActivationCodes,
+  refreshOutsourcedActivationCodeById,
+  refreshOutsourcedActivationCodeStatuses,
+} from '../services/outsourced-activation-code.service.ts';
 import {
   archiveWorkerAccount,
   createWorkerAccount,
@@ -19,6 +31,7 @@ import { getDashboardStats } from '../services/dashboard.service.ts';
 import {
   getAutoPaymentDetectionSetting,
   getMaintenanceModeSetting,
+  getPaymentProcessingConfig,
   getPaymentProcessingSetting,
   getProxySetting,
   updateAutoPaymentDetectionSetting,
@@ -29,8 +42,14 @@ import {
 import {
   batchCodesSchema,
   archiveUsedCodesSchema,
+  bulkRedemptionCodesSchema,
   createWorkerSchema,
+  importOutsourcedActivationCodesSchema,
+  listWorkersQuerySchema,
   listRedemptionCodesQuerySchema,
+  listOutsourcedActivationCodesQuerySchema,
+  bulkOutsourcedActivationCodesSchema,
+  refreshOutsourcedActivationCodesSchema,
   updateWorkerSchema,
   updateOrderSchema,
   updateAutoPaymentDetectionSettingSchema,
@@ -89,6 +108,17 @@ router.post('/redemption-codes/archive-used', async (req, res, next) => {
   }
 });
 
+router.post('/redemption-codes/delete-unused', async (req, res, next) => {
+  try {
+    const parsed = bulkRedemptionCodesSchema.safeParse(req.body);
+    if (!parsed.success) throw new AppError(400, 'Invalid input');
+
+    res.json(await deleteUnusedCodes(parsed.data));
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post('/redemption-codes/:id/archive', async (req, res, next) => {
   try {
     res.json(await archiveCode(req.params.id));
@@ -100,6 +130,105 @@ router.post('/redemption-codes/:id/archive', async (req, res, next) => {
 router.delete('/redemption-codes/:id', async (req, res, next) => {
   try {
     await deleteCode(req.params.id);
+    res.json({ success: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Outsourced activation codes
+router.post('/outsourced-activation-codes/import', async (req, res, next) => {
+  try {
+    const parsed = importOutsourcedActivationCodesSchema.safeParse(req.body);
+    if (!parsed.success) throw new AppError(400, 'Invalid input');
+
+    const result = await importOutsourcedActivationCodes({
+      codesText: parsed.data.codesText,
+      batchLabel: parsed.data.batchLabel,
+      createdById: req.user!.sub,
+    });
+    res.status(201).json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/outsourced-activation-codes', async (req, res, next) => {
+  try {
+    const parsed = listOutsourcedActivationCodesQuerySchema.safeParse(req.query);
+    if (!parsed.success) throw new AppError(400, 'Invalid input');
+
+    res.json(await listOutsourcedActivationCodes(parsed.data));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/outsourced-activation-code-batches', async (_req, res, next) => {
+  try {
+    res.json({ batches: await listOutsourcedActivationCodeBatches() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/outsourced-activation-codes/refresh', async (req, res, next) => {
+  try {
+    const parsed = refreshOutsourcedActivationCodesSchema.safeParse(req.body);
+    if (!parsed.success) throw new AppError(400, 'Invalid input');
+    const config = await getPaymentProcessingConfig();
+
+    res.json(await refreshOutsourcedActivationCodeStatuses({
+      baseUrl: config.outsourcedBuyerApiBaseUrl,
+      filters: parsed.data,
+    }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/outsourced-activation-codes/archive', async (req, res, next) => {
+  try {
+    const parsed = bulkOutsourcedActivationCodesSchema.safeParse(req.body);
+    if (!parsed.success) throw new AppError(400, 'Invalid input');
+
+    res.json(await archiveOutsourcedActivationCodes(parsed.data));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/outsourced-activation-codes/delete-unused', async (req, res, next) => {
+  try {
+    const parsed = bulkOutsourcedActivationCodesSchema.safeParse(req.body);
+    if (!parsed.success) throw new AppError(400, 'Invalid input');
+
+    res.json(await deleteUnusedOutsourcedActivationCodes(parsed.data));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/outsourced-activation-codes/:id/refresh', async (req, res, next) => {
+  try {
+    const config = await getPaymentProcessingConfig();
+    res.json(await refreshOutsourcedActivationCodeById(req.params.id, config.outsourcedBuyerApiBaseUrl));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/outsourced-activation-codes/:id/archive', async (req, res, next) => {
+  try {
+    res.json(await archiveOutsourcedActivationCode(req.params.id));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.delete('/outsourced-activation-codes/:id', async (req, res, next) => {
+  try {
+    await deleteOutsourcedActivationCode(req.params.id);
     res.json({ success: true });
   } catch (error) {
     next(error);
@@ -119,10 +248,12 @@ router.post('/workers', async (req, res, next) => {
   }
 });
 
-router.get('/workers', async (_req, res, next) => {
+router.get('/workers', async (req, res, next) => {
   try {
-    const workers = await listWorkerAccountsForManagement();
-    res.json({ workers });
+    const parsed = listWorkersQuerySchema.safeParse(req.query);
+    if (!parsed.success) throw new AppError(400, 'Invalid input');
+
+    res.json(await listWorkerAccountsForManagement(parsed.data));
   } catch (error) {
     next(error);
   }

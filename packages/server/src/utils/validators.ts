@@ -40,6 +40,31 @@ export const archiveUsedCodesSchema = z.object({
   search: z.string().max(100).trim().transform((value) => value || undefined).optional(),
 });
 
+export const bulkRedemptionCodesSchema = archiveUsedCodesSchema;
+
+export const importOutsourcedActivationCodesSchema = z.object({
+  codesText: z.string().max(20000).trim(),
+  batchLabel: z.string().max(100).trim().transform((value) => value || undefined).optional(),
+});
+
+export const listOutsourcedActivationCodesQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  status: z.enum(['all', 'available', 'exhausted', 'error', 'unknown']).default('all'),
+  archiveScope: z.enum(['active', 'archived', 'all']).default('active'),
+  batchLabel: z.string().max(100).trim().transform((value) => value || undefined).optional(),
+  search: z.string().max(100).trim().transform((value) => value || undefined).optional(),
+});
+
+export const refreshOutsourcedActivationCodesSchema = z.object({
+  status: z.enum(['all', 'available', 'exhausted', 'error', 'unknown']).default('all'),
+  archiveScope: z.enum(['active', 'archived', 'all']).default('active'),
+  batchLabel: z.string().max(100).trim().transform((value) => value || undefined).optional(),
+  search: z.string().max(100).trim().transform((value) => value || undefined).optional(),
+});
+
+export const bulkOutsourcedActivationCodesSchema = refreshOutsourcedActivationCodesSchema;
+
 export const createWorkerSchema = z.object({
   username: z.string().min(2).max(50),
   password: z.string().min(6).max(200),
@@ -50,6 +75,13 @@ export const updateWorkerSchema = z.object({
   enabled: z.boolean().optional(),
   password: z.string().min(6).max(200).optional(),
   displayName: z.string().max(100).optional(),
+});
+
+export const listWorkersQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  status: z.enum(['all', 'enabled', 'disabled']).default('all'),
+  search: z.string().max(100).trim().transform((value) => value || undefined).optional(),
 });
 
 export const updateOrderSchema = z.object({
@@ -79,4 +111,6 @@ export const listOrdersQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(50),
   status: orderStatusSchema.optional(),
+  paymentHandler: z.enum(['LOCAL_WORKER', 'OUTSOURCED_BUYER_API']).optional(),
+  trackingToken: z.string().max(100).trim().transform((value) => value || undefined).optional(),
 });

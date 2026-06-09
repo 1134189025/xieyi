@@ -36,6 +36,7 @@ vi.mock('../ws/index.ts', () => ({
 
 const {
   claimPaymentOrderBatch,
+  cancelOrder,
   createOrder,
   completeOrder,
   completeClaimedPaymentOrder,
@@ -657,5 +658,79 @@ describe('order.service', () => {
       generationErrorHttpStatus: 400,
     });
     expect(response.orders[0]).not.toHaveProperty('pixCode');
+  });
+
+  it('admin orders can be filtered by tracking token and payment handler', async () => {
+    prisma.order.findMany.mockResolvedValue([]);
+    prisma.order.count.mockResolvedValue(0);
+
+    await getAdminOrders({
+      page: 2,
+      limit: 20,
+      status: 'PENDING_PAYMENT',
+      paymentHandler: 'OUTSOURCED_BUYER_API',
+      trackingToken: 'track-abc',
+    });
+
+    expect(prisma.order.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        status: 'PENDING_PAYMENT',
+        paymentHandler: 'OUTSOURCED_BUYER_API',
+        trackingToken: { contains: 'track-abc', mode: 'insensitive' },
+      },
+      skip: 20,
+      take: 20,
+    }));
+    expect(prisma.order.count).toHaveBeenCalledWith({
+      where: {
+        status: 'PENDING_PAYMENT',
+        paymentHandler: 'OUTSOURCED_BUYER_API',
+        trackingToken: { contains: 'track-abc', mode: 'insensitive' },
+      },
+    });
+  });
+
+  it('does not cancel outsourced pending orders after a remote ticket is created', async () => {
+    prisma.order.updateMany.mockResolvedValue({ count: 0 });
+    prisma.order.findUnique.mockResolvedValue({
+      id: 'order-1',
+      status: 'PENDING_PAYMENT',
+      paymentHandler: 'OUTSOURCED_BUYER_API',
+      outsourcedTicketId: 'Toutsource123',
+    });
+
+    await expect(cancelOrder('order-1')).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'OUTSOURCED_ORDER_CANCEL_BLOCKED',
+    });
+
+    expect(prisma.order.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'order-1',
+        status: { in: ['CREATING_PAYMENT', 'PENDING_PAYMENT', 'FAILED', 'EXPIRED'] },
+        OR: [
+          { status: { not: 'PENDING_PAYMENT' } },
+          { paymentHandler: { not: 'OUTSOURCED_BUYER_API' } },
+          { outsourcedTicketId: null },
+        ],
+      },
+      data: { status: 'CANCELLED' },
+    });
+    expect(broadcastOrderStatusChange).not.toHaveBeenCalled();
+  });
+
+  it('still cancels local pending payment orders', async () => {
+    const cancelledOrder = {
+      id: 'order-1',
+      status: 'CANCELLED',
+      paymentHandler: 'LOCAL_WORKER',
+      outsourcedTicketId: null,
+    };
+    prisma.order.updateMany.mockResolvedValue({ count: 1 });
+    prisma.order.findUnique.mockResolvedValue(cancelledOrder);
+
+    await expect(cancelOrder('order-1')).resolves.toEqual({ id: 'order-1', status: 'CANCELLED' });
+
+    expect(broadcastOrderStatusChange).toHaveBeenCalledWith(cancelledOrder);
   });
 });

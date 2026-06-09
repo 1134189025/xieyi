@@ -4,14 +4,17 @@
   "type": "module",
   "scripts": {
     "typecheck": "npm --workspace @pix/core run typecheck && npm --workspace @pix/server run typecheck && npm --workspace @pix/web run typecheck",
-    "build": "npm --workspace @pix/web run build",
+    "build": "npm --workspace @pix/server run build && npm --workspace @pix/web run build",
     "test": "vitest run",
-    "audit:prod": "npm audit --omit=dev"
+    "audit:prod": "npm audit --omit=dev",
+    "smoke:prod": "node tools/production-smoke.mjs",
+    "smoke:e2e": "node tools/external-e2e-smoke.mjs"
   },
   "workspaces": [
     "packages/*"
   ],
   "devDependencies": {
+    "esbuild": "^0.28.0",
     "jsdom": "^29.1.1",
     "vitest": "^4.1.7"
   }

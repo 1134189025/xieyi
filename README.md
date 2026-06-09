@@ -53,6 +53,9 @@ CREATE_ORDER_RATE_LIMIT_PER_MIN=30
 
 # 后台 Pix 生成 worker 并发
 PIX_WORKER_CONCURRENCY=5
+
+# API 维护循环：过期本地 Pix、检测 Stripe/外包支付终态。多 API 实例部署时只保留一个实例为 true
+ENABLE_PAYMENT_MAINTENANCE=true
 ```
 
 生成 64 位 hex 密钥：
@@ -69,6 +72,14 @@ npx prisma migrate dev
 npm run db:generate
 ```
 
+生产部署不要使用 `migrate dev`，应在完成构建和配置检查后执行：
+
+```bash
+cd packages/server
+npx prisma migrate deploy
+npm run db:generate
+```
+
 ## 开发启动
 
 需要三个进程：
@@ -78,7 +89,7 @@ npm run db:generate
 npm --workspace @pix/server run dev
 
 # 终端 2：Pix 生成 worker
-npm --workspace @pix/server run start:worker
+npm --workspace @pix/server run dev:worker
 
 # 终端 3：前端
 npm --workspace @pix/web run dev
@@ -92,6 +103,10 @@ API 和 worker 必须分开管理，避免 API 扩容时重复承担生成任务
 
 ```bash
 npm install -g pm2
+npm install
+npm run build
+npx prisma migrate deploy --schema packages/server/prisma/schema.prisma
+npm --workspace @pix/server run db:generate
 
 pm2 start "npm --workspace @pix/server run start" --name pix-api
 pm2 start "npm --workspace @pix/server run start:worker" --name pix-worker
@@ -100,7 +115,7 @@ pm2 save
 pm2 startup
 ```
 
-调整吞吐时优先调 `PIX_WORKER_CONCURRENCY` 和 worker 进程数；客户提交高峰不会直接失败，合法订单会留在队列等待。
+调整吞吐时优先调 `PIX_WORKER_CONCURRENCY` 和 worker 进程数；客户提交高峰不会直接失败，合法订单会留在队列等待。API 多实例部署时，只有一个实例应设置 `ENABLE_PAYMENT_MAINTENANCE=true`，其余 API 实例设为 `false`，避免重复扫描支付状态。
 
 ## Nginx 真实 IP
 
@@ -177,6 +192,69 @@ npm --workspace @pix/web run build
 git diff --check
 ```
 
+## 生产冒烟检查
+
+仓库提供 `npm run smoke:prod` 用于上线后快速检查运行中的 API。默认只执行只读检查：
+
+- `/api/health`
+- `/api/ready`
+- 管理员登录
+
+生产环境建议显式设置目标地址和管理员账号：
+
+```bash
+PIX_BASE_URL=https://your-domain.example
+PIX_ADMIN_USERNAME=admin
+PIX_ADMIN_PASSWORD=your-admin-password
+npm run smoke:prod
+```
+
+也兼容使用 `ADMIN_USERNAME` 和 `ADMIN_PASSWORD`。`PIX_BASE_URL` 未设置时默认检查 `http://127.0.0.1:3000`。默认不会创建订单或删除任何兑换码。
+
+需要验证写入链路时再显式打开开关：
+
+```bash
+# 生成 2 个本地兑换码，创建 1 个公开订单，并按本次 smoke 批次删除未使用码
+PIX_SMOKE_WRITE=1 npm run smoke:prod
+
+# 额外导入 2 个外包测试码、列出并按本次 smoke 批次删除未使用外包码
+PIX_SMOKE_WRITE=1 PIX_SMOKE_OUTSOURCED=1 npm run smoke:prod
+```
+
+外包写入检查必须同时设置 `PIX_SMOKE_WRITE=1`，单独设置 `PIX_SMOKE_OUTSOURCED=1` 会被脚本拒绝。写入检查会使用 `smoke-<时间戳>` 批次标签，并且删除接口只按本次批次清理未使用码；不要在生产库手动复用这个批次标签。
+
+## 真实小流量端到端验证
+
+仓库还提供 `npm run smoke:e2e` 用于受控 staging/小流量环境。这个脚本会创建真实测试订单，并等待 Pix worker、ChatGPT/Stripe 和可选外包买家 API 链路返回业务状态；它不是普通健康检查。
+
+脚本默认拒绝执行，必须同时确认写入和真实外部请求风险：
+
+```bash
+PIX_BASE_URL=https://your-staging.example
+PIX_ADMIN_USERNAME=admin
+PIX_ADMIN_PASSWORD=your-admin-password
+PIX_E2E_WRITE=1
+PIX_E2E_ACK_RISK=I_UNDERSTAND_REAL_EXTERNAL_REQUESTS
+PIX_E2E_SESSION='real ChatGPT accessToken or session JSON'
+PIX_E2E_MODE=local
+npm run smoke:e2e
+```
+
+`PIX_E2E_MODE=local` 会验证：创建本地兑换码、提交真实订单、等待 Pix 生成到 `PENDING_PAYMENT`、用管理员身份调用工人批量领取接口并确认能拿到 Pix 载荷。默认不会自动把订单标记完成；只有显式设置 `PIX_E2E_LOCAL_COMPLETE=1` 才会调用工人完成接口，这一步属于人工付款完成模拟，不代表 Stripe 真实付款。
+
+`PIX_E2E_MODE=outsourced` 会验证：导入外包兑换码（可选但推荐设置 `PIX_E2E_OUTSOURCED_CODE`）、创建真实订单、等待 Pix 生成并提交到外包买家端 API，然后轮询公开追踪接口直到 `PAYMENT_COMPLETED` 或 `FAILED`。如果当前后台付款处理方式和 `PIX_E2E_MODE` 不一致，脚本默认拒绝切换；只有在受控环境显式设置 `PIX_E2E_ALLOW_SETTING_UPDATE=1` 才会更新后台付款处理方式。
+
+可选参数：
+
+| 环境变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `PIX_E2E_MODE` | `local` | `local` 或 `outsourced` |
+| `PIX_E2E_TIMEOUT_MS` | `600000` | 等待订单到达目标状态的最长时间 |
+| `PIX_E2E_POLL_MS` | `5000` | 轮询公开追踪接口的间隔 |
+| `PIX_E2E_OUTSOURCED_CODE` | 无 | 外包模式下导入到本次批次的真实外包兑换码 |
+| `PIX_E2E_ALLOW_SETTING_UPDATE` | `0` | 是否允许脚本切换后台付款处理方式 |
+| `PIX_E2E_LOCAL_COMPLETE` | `0` | 本地模式下是否调用工人完成接口 |
+
 ## API 摘要
 
 | Method | Path | 说明 | 认证 |
@@ -184,7 +262,11 @@ git diff --check
 | POST | `/api/auth/login` | 登录 | 无 |
 | POST | `/api/orders` | 创建排队订单，返回追踪 token | 无 |
 | GET | `/api/orders/track/:token` | 查询订单与排队估算 | 无 |
-| GET | `/api/worker/orders` | 全部待支付订单 | Worker/Admin |
+| GET | `/api/worker/orders/mine` | 当前工人已领取任务 | Worker/Admin |
+| GET | `/api/worker/orders/available` | 当前可领取任务 | Worker/Admin |
+| POST | `/api/worker/orders/claim-batch` | 批量领取最多 10 单 | Worker/Admin |
+| POST | `/api/worker/orders/:id/renew` | 续租已领取任务 | Worker/Admin |
+| POST | `/api/worker/orders/:id/release` | 释放已领取任务 | Worker/Admin |
 | GET | `/api/worker/summary` | 总体/今日/本周完成数 | Worker/Admin |
 | POST | `/api/worker/orders/:id/complete` | 标记待支付订单完成 | Worker/Admin |
 | GET | `/api/admin/dashboard` | 看板统计和队列指标 | Admin |

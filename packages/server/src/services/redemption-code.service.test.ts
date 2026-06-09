@@ -4,6 +4,7 @@ const prisma = {
   redemptionCode: {
     count: vi.fn(),
     delete: vi.fn(),
+    deleteMany: vi.fn(),
     findMany: vi.fn(),
     findUnique: vi.fn(),
     update: vi.fn(),
@@ -17,6 +18,7 @@ const {
   archiveCode,
   archiveUsedCodes,
   deleteCode,
+  deleteUnusedCodes,
   listCodeBatches,
   listCodes,
 } = await import('./redemption-code.service.ts');
@@ -25,6 +27,7 @@ describe('redemption-code.service', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     prisma.redemptionCode.count.mockResolvedValue(0);
+    prisma.redemptionCode.deleteMany.mockResolvedValue({ count: 0 });
     prisma.redemptionCode.findMany.mockResolvedValue([]);
   });
 
@@ -124,6 +127,58 @@ describe('redemption-code.service', () => {
     });
   });
 
+  it('does not re-archive already archived codes when archive scope is all', async () => {
+    prisma.redemptionCode.updateMany.mockResolvedValue({ count: 1 });
+
+    await archiveUsedCodes({
+      status: 'all',
+      batchLabel: 'batch-001',
+      archiveScope: 'all',
+    });
+
+    expect(prisma.redemptionCode.updateMany).toHaveBeenCalledWith({
+      where: {
+        AND: [
+          {
+            usedAt: { not: null },
+            batchLabel: 'batch-001',
+          },
+          { archivedAt: null },
+        ],
+      },
+      data: { archivedAt: expect.any(Date) },
+    });
+  });
+
+  it('deletes only unused codes matching current filters', async () => {
+    prisma.redemptionCode.deleteMany.mockResolvedValue({ count: 2 });
+
+    await expect(
+      deleteUnusedCodes({
+        status: 'all',
+        batchLabel: 'batch-001',
+        search: 'ABCD',
+        archiveScope: 'active',
+      }),
+    ).resolves.toEqual({ deletedCount: 2 });
+
+    expect(prisma.redemptionCode.deleteMany).toHaveBeenCalledWith({
+      where: {
+        AND: [
+          {
+            batchLabel: 'batch-001',
+            archivedAt: null,
+            OR: [
+              { code: { contains: 'ABCD', mode: 'insensitive' } },
+              { batchLabel: { contains: 'ABCD', mode: 'insensitive' } },
+            ],
+          },
+          { usedAt: null },
+        ],
+      },
+    });
+  });
+
   it('returns batch options with used and unused counts', async () => {
     prisma.redemptionCode.findMany.mockResolvedValue([
       { batchLabel: 'batch-001', usedAt: null, archivedAt: null },
@@ -138,4 +193,3 @@ describe('redemption-code.service', () => {
     ]);
   });
 });
-

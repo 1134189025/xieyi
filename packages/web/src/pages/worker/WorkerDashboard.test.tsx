@@ -414,6 +414,26 @@ describe('WorkerDashboard', () => {
     expect(container.querySelector('img[alt="Pix 二维码"]')).not.toBeNull();
   });
 
+  it('续租失败时提示任务锁失效并刷新任务列表', async () => {
+    vi.useFakeTimers();
+    mockDashboardLoad([workerOrder()]);
+    (api.post as Mock).mockRejectedValue(new Error('claim expired'));
+
+    const { root } = renderWorkerDashboard();
+    mountedRoot = root;
+    await flushAsyncWork();
+
+    await act(async () => {
+      vi.advanceTimersByTime(60_000);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(api.post).toHaveBeenCalledWith('/worker/orders/order-1/renew');
+    expect(toast.error).toHaveBeenCalledWith('部分任务锁已失效，已刷新任务列表');
+  });
+
   it('silently refreshes worker orders and completion counters every 10 seconds', async () => {
     vi.useFakeTimers();
     let orderRequests = 0;

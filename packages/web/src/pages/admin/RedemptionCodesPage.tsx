@@ -3,8 +3,9 @@ import api from '../../api/client';
 import Layout from '../../components/Layout';
 import { AUTO_REFRESH_INTERVAL_MS, useAutoRefresh } from '../../hooks/useAutoRefresh';
 import toast from 'react-hot-toast';
-import { Plus, Trash2, Copy, Loader2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, Trash2, Copy, Loader2 } from 'lucide-react';
 import { orderStatusLabel } from '../../utils/labels';
+import { visiblePageNumbers } from '../../utils/pagination';
 
 interface CodeItem {
   id: string;
@@ -31,6 +32,7 @@ export default function RedemptionCodesPage() {
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [archiving, setArchiving] = useState(false);
+  const [deletingUnused, setDeletingUnused] = useState(false);
   const [count, setCount] = useState(10);
   const [batchLabel, setBatchLabel] = useState('');
   const [error, setError] = useState('');
@@ -131,6 +133,25 @@ export default function RedemptionCodesPage() {
     }
   };
 
+  const handleDeleteUnused = async () => {
+    if (!confirm('确认按当前筛选删除未使用兑换码？已使用兑换码不会被删除。')) return;
+    setDeletingUnused(true);
+    try {
+      const res = await api.post('/admin/redemption-codes/delete-unused', {
+        status: filter,
+        batchLabel: batchLabelFilter || undefined,
+        search: search || undefined,
+        archiveScope,
+      });
+      toast.success(`已删除 ${res.data.deletedCount ?? 0} 个未使用兑换码`);
+      fetchCodes();
+    } catch {
+      toast.error('批量删除失败');
+    } finally {
+      setDeletingUnused(false);
+    }
+  };
+
   const handleCopy = async (code: string) => {
     try {
       await navigator.clipboard.writeText(code);
@@ -151,12 +172,13 @@ export default function RedemptionCodesPage() {
   };
 
   const totalPages = Math.ceil(total / 20);
+  const visiblePages = visiblePageNumbers(page, totalPages);
 
   return (
     <Layout>
-      <h2 className="mb-6 text-2xl font-bold text-app-primary">兑换码管理</h2>
+      <h2 className="mb-6 text-2xl font-bold text-app-primary">本地兑换码管理</h2>
 
-      <div className="mb-6 rounded-xl border border-app-border bg-app-surface p-4 shadow-checkout sm:p-6">
+      <div className="mb-6 rounded-lg border border-app-border bg-app-surface p-4 shadow-checkout sm:p-6">
         <h3 className="text-lg font-semibold mb-4">生成兑换码</h3>
         <div className="flex flex-wrap gap-4 items-end">
           <div className="w-full sm:w-auto">
@@ -198,56 +220,73 @@ export default function RedemptionCodesPage() {
         </div>
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-app-border bg-app-surface shadow-checkout">
-        <div className="flex flex-wrap items-center gap-3 border-b border-app-border px-4 py-4 sm:gap-4 sm:px-6">
-          <span className="text-sm text-app-secondary">筛选：</span>
-          {(['all', 'unused', 'used'] as const).map((f) => (
+      <div className="overflow-hidden rounded-lg border border-app-border bg-app-surface shadow-checkout">
+        <div className="grid grid-cols-1 gap-3 border-b border-app-border px-4 py-4 sm:px-6 lg:flex lg:flex-wrap lg:items-center">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+            <span className="text-sm text-app-secondary">筛选</span>
+            {(['all', 'unused', 'used'] as const).map((f) => (
+              <button
+                key={f}
+                onClick={() => { setFilter(f); setPage(1); }}
+                className={`rounded-lg px-3 py-1 text-sm ${
+                  filter === f ? 'bg-app-accent text-white' : 'text-app-secondary hover:bg-neutral-100'
+                }`}
+              >
+                {f === 'all' ? '全部' : f === 'unused' ? '未使用' : '已使用'}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+            <span className="text-sm text-app-secondary">归档</span>
+            {(['active', 'archived', 'all'] as const).map((scope) => (
+              <button
+                key={scope}
+                onClick={() => { setArchiveScope(scope); setPage(1); }}
+                className={`rounded-lg px-3 py-1 text-sm ${
+                  archiveScope === scope ? 'bg-app-accent text-white' : 'text-app-secondary hover:bg-neutral-100'
+                }`}
+              >
+                {scope === 'active' ? '未归档' : scope === 'archived' ? '已归档' : '全部'}
+              </button>
+            ))}
+          </div>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:flex">
+            <input
+              type="text"
+              value={batchLabelFilter}
+              onInput={(event) => { setBatchLabelFilter(event.currentTarget.value); setPage(1); }}
+              placeholder="输入批次标签筛选"
+              className="w-full rounded-lg border border-app-border px-3 py-2 text-sm outline-none focus:border-app-accent lg:w-44"
+            />
+            <input
+              type="search"
+              value={search}
+              onInput={(event) => { setSearch(event.currentTarget.value); setPage(1); }}
+              placeholder="搜索兑换码或批次"
+              className="w-full rounded-lg border border-app-border px-3 py-2 text-sm outline-none focus:border-app-accent lg:w-44"
+            />
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row">
             <button
-              key={f}
-              onClick={() => { setFilter(f); setPage(1); }}
-              className={`px-3 py-1 text-sm rounded-full ${
-                filter === f ? 'bg-app-accent text-white' : 'text-app-secondary hover:bg-neutral-100'
-              }`}
+              type="button"
+              data-testid="archive-used-codes"
+              onClick={handleArchiveUsed}
+              disabled={archiving}
+              className="rounded-lg bg-neutral-900 px-3 py-2 text-sm text-white hover:bg-neutral-700 disabled:opacity-50"
             >
-              {f === 'all' ? '全部' : f === 'unused' ? '未使用' : '已使用'}
+              {archiving ? '归档中...' : '归档已使用'}
             </button>
-          ))}
-          <span className="text-sm text-app-secondary">归档：</span>
-          {(['active', 'archived', 'all'] as const).map((scope) => (
             <button
-              key={scope}
-              onClick={() => { setArchiveScope(scope); setPage(1); }}
-              className={`px-3 py-1 text-sm rounded-full ${
-                archiveScope === scope ? 'bg-app-accent text-white' : 'text-app-secondary hover:bg-neutral-100'
-              }`}
+              type="button"
+              data-testid="delete-unused-codes"
+              onClick={handleDeleteUnused}
+              disabled={deletingUnused}
+              className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 hover:bg-red-100 disabled:opacity-50"
             >
-              {scope === 'active' ? '未归档' : scope === 'archived' ? '已归档' : '全部'}
+              {deletingUnused ? '删除中...' : '删除未使用'}
             </button>
-          ))}
-          <input
-            type="text"
-            value={batchLabelFilter}
-            onInput={(event) => { setBatchLabelFilter(event.currentTarget.value); setPage(1); }}
-            placeholder="输入批次标签筛选"
-            className="w-full rounded-lg border border-app-border px-3 py-2 text-sm outline-none focus:border-app-accent sm:w-44"
-          />
-          <input
-            type="search"
-            value={search}
-            onInput={(event) => { setSearch(event.currentTarget.value); setPage(1); }}
-            placeholder="搜索兑换码或批次"
-            className="w-full rounded-lg border border-app-border px-3 py-2 text-sm outline-none focus:border-app-accent sm:w-44"
-          />
-          <button
-            type="button"
-            data-testid="archive-used-codes"
-            onClick={handleArchiveUsed}
-            disabled={archiving}
-            className="rounded-lg bg-neutral-900 px-3 py-2 text-sm text-white hover:bg-neutral-700 disabled:opacity-50"
-          >
-            {archiving ? '归档中...' : '归档已使用'}
-          </button>
-          <span className="w-full text-sm text-app-secondary sm:ml-auto sm:w-auto">共 {total} 条</span>
+          </div>
+          <span className="text-sm text-app-secondary lg:ml-auto">共 {total} 条</span>
         </div>
 
         {loading ? (
@@ -322,22 +361,43 @@ export default function RedemptionCodesPage() {
                 ))}
               </tbody>
             </table>
+            {codes.length === 0 && (
+              <div className="border-t border-app-border px-6 py-10 text-center text-sm text-app-secondary">
+                没有符合筛选条件的兑换码
+              </div>
+            )}
           </div>
         )}
 
         {totalPages > 1 && (
-          <div className="flex flex-wrap justify-center gap-2 border-t border-app-border px-4 py-4 sm:px-6">
-            {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => (
+          <div className="flex flex-wrap items-center justify-center gap-2 border-t border-app-border px-4 py-4 sm:px-6">
+            <button
+              onClick={() => setPage((currentPage) => Math.max(1, currentPage - 1))}
+              disabled={page <= 1}
+              className="inline-flex h-9 w-9 items-center justify-center rounded border border-app-border text-app-secondary hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-40"
+              title="上一页"
+            >
+              <ChevronLeft size={16} />
+            </button>
+            {visiblePages.map((p) => (
               <button
                 key={p}
                 onClick={() => setPage(p)}
-                className={`px-3 py-1 text-sm rounded ${
+                className={`h-9 min-w-9 rounded px-3 text-sm ${
                   page === p ? 'bg-app-accent text-white' : 'text-app-secondary hover:bg-neutral-100'
                 }`}
               >
                 {p}
               </button>
             ))}
+            <button
+              onClick={() => setPage((currentPage) => Math.min(totalPages, currentPage + 1))}
+              disabled={page >= totalPages}
+              className="inline-flex h-9 w-9 items-center justify-center rounded border border-app-border text-app-secondary hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-40"
+              title="下一页"
+            >
+              <ChevronRight size={16} />
+            </button>
           </div>
         )}
       </div>

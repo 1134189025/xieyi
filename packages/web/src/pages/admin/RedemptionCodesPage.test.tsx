@@ -79,11 +79,23 @@ describe('RedemptionCodesPage', () => {
     expect(container.textContent).not.toContain('CODE-OLD');
   });
 
-  it('filters by batch and search and archives used codes with current filters', async () => {
+  it('shows an empty state when no redemption codes match the current filters', async () => {
+    (api.get as Mock).mockResolvedValueOnce({ data: { codes: [], total: 0 } });
+
+    const { container, root } = await renderRedemptionCodesPage();
+    mountedRoot = root;
+
+    expect(container.textContent).toContain('本地兑换码管理');
+    expect(container.textContent).toContain('没有符合筛选条件的兑换码');
+  });
+
+  it('filters by batch and search then archives or deletes with current filters', async () => {
     (api.get as Mock)
       .mockResolvedValueOnce({ data: { codes: [codeResponse('CODE-OLD', { batchLabel: 'batch-001', usedAt: '2026-06-01T00:00:00.000Z' })], total: 1 } })
       .mockResolvedValueOnce({ data: { codes: [], total: 0 } });
-    (api.post as Mock).mockResolvedValue({ data: { archivedCount: 1 } });
+    (api.post as Mock)
+      .mockResolvedValueOnce({ data: { archivedCount: 1 } })
+      .mockResolvedValueOnce({ data: { deletedCount: 1 } });
     vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     const { container, root } = await renderRedemptionCodesPage();
@@ -110,8 +122,21 @@ describe('RedemptionCodesPage', () => {
       await Promise.resolve();
       await Promise.resolve();
     });
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('button[data-testid="delete-unused-codes"]')?.dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
 
     expect(api.post).toHaveBeenCalledWith('/admin/redemption-codes/archive-used', {
+      status: 'all',
+      batchLabel: 'batch-001',
+      search: 'CODE',
+      archiveScope: 'active',
+    });
+    expect(api.post).toHaveBeenCalledWith('/admin/redemption-codes/delete-unused', {
       status: 'all',
       batchLabel: 'batch-001',
       search: 'CODE',

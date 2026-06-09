@@ -5,6 +5,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import ProxySettingsPage from './ProxySettingsPage';
 import api from '../../api/client';
+import toast from 'react-hot-toast';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -17,6 +18,12 @@ vi.mock('../../api/client', () => ({
 
 vi.mock('../../components/Layout', () => ({
   default: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+}));
+
+vi.mock('react-router-dom', () => ({
+  Link: ({ children, to, className }: { children: React.ReactNode; to: string; className?: string }) => (
+    <a href={to} className={className}>{children}</a>
+  ),
 }));
 
 vi.mock('react-hot-toast', () => ({
@@ -39,21 +46,27 @@ function proxySettingsResponse() {
   };
 }
 
-function paymentProcessingResponse() {
+function paymentProcessingResponse(overrides: Partial<{
+  handler: string;
+  outsourcedBuyerApiBaseUrl: string;
+  outsourcedActivationCodeCount: number;
+  outsourcedActivationCodePreview: string[];
+}> = {}) {
   return {
     handler: 'LOCAL_WORKER',
     outsourcedBuyerApiBaseUrl: 'https://scan.amazo.indevs.in',
     outsourcedActivationCodeCount: 2,
     outsourcedActivationCodePreview: ['DP-F...ODE', 'DP-S...ODE'],
+    ...overrides,
   };
 }
 
-function mockSettingsResponse() {
+function mockSettingsResponse(paymentProcessing = paymentProcessingResponse()) {
   (api.get as Mock)
     .mockResolvedValueOnce({ data: proxySettingsResponse() })
     .mockResolvedValueOnce({ data: { enabled: true } })
     .mockResolvedValueOnce({ data: { enabled: false } })
-    .mockResolvedValueOnce({ data: paymentProcessingResponse() });
+    .mockResolvedValueOnce({ data: paymentProcessing });
 }
 
 async function renderSettingsPage() {
@@ -98,6 +111,8 @@ describe('ProxySettingsPage', () => {
     expect(container.textContent).toContain('付款处理方式');
     expect(container.textContent).toContain('本地工人扫码');
     expect(container.textContent).toContain('DP-F...ODE');
+    expect(container.textContent).toContain('去管理外包兑换码');
+    expect(container.querySelector('a[href="/admin/outsourced-activation-codes"]')).not.toBeNull();
     expect(container.textContent).toContain('维护模式');
     expect(container.textContent).toContain('http://chat-user:****@chat.example:10000');
     expect(container.textContent).not.toContain('chat-pass');
@@ -162,14 +177,11 @@ describe('ProxySettingsPage', () => {
       button.textContent?.includes('外包自动支付'),
     );
     const apiBaseUrlInput = container.querySelector<HTMLInputElement>('input[placeholder="https://scan.amazo.indevs.in"]');
-    const textareas = container.querySelectorAll<HTMLTextAreaElement>('textarea');
 
     await act(async () => {
       outsourcedButton!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
       setInputValue(apiBaseUrlInput!, 'https://scan.amazo.indevs.in/buyer/');
       apiBaseUrlInput!.dispatchEvent(new Event('input', { bubbles: true }));
-      setTextareaValue(textareas[2], 'DP-FIRST-CODE\nDP-SECOND-CODE');
-      textareas[2].dispatchEvent(new Event('input', { bubbles: true }));
     });
 
     const saveButton = Array.from(container.querySelectorAll('button')).find((button) =>
@@ -183,11 +195,38 @@ describe('ProxySettingsPage', () => {
     expect(api.put).toHaveBeenCalledWith('/admin/settings/payment-processing', {
       handler: 'OUTSOURCED_BUYER_API',
       outsourcedBuyerApiBaseUrl: 'https://scan.amazo.indevs.in/buyer/',
-      outsourcedActivationCodePool: 'DP-FIRST-CODE\nDP-SECOND-CODE',
     });
     expect(container.textContent).toContain('外包自动支付');
     expect(container.textContent).toContain('DP-F...ODE');
     expect(container.textContent).not.toContain('DP-FIRST-CODE');
+  });
+
+  it('blocks outsourced payment processing when no outsourced activation codes are configured', async () => {
+    mockSettingsResponse(paymentProcessingResponse({
+      outsourcedActivationCodeCount: 0,
+      outsourcedActivationCodePreview: [],
+    }));
+
+    const { container, root } = await renderSettingsPage();
+    mountedRoot = root;
+
+    const outsourcedButton = Array.from(container.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('外包自动支付'),
+    );
+    await act(async () => {
+      outsourcedButton!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    const saveButton = Array.from(container.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('保存付款处理方式'),
+    );
+    await act(async () => {
+      saveButton!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    expect(api.put).not.toHaveBeenCalledWith('/admin/settings/payment-processing', expect.anything());
+    expect(toast.error).toHaveBeenCalledWith('请先导入外包兑换码，再开启外包自动支付');
   });
 
   it('refreshes settings every 10 seconds without clearing edited proxy textareas', async () => {
@@ -251,7 +290,7 @@ describe('ProxySettingsPage', () => {
     expect(api.get).toHaveBeenCalledTimes(8);
     expect(textareas[0].value).toBe('chat.example:10000:chat-user:chat-pass');
     expect(textareas[1].value).toBe('stripe.example:10001:stripe-user:stripe-pass');
-    expect(textareas[2].value).toBe('');
+    expect(textareas).toHaveLength(2);
     expect(container.textContent).toContain('http://chat-user:****@chat2.example:10002');
   });
 });

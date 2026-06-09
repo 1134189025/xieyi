@@ -1,6 +1,6 @@
 # API 接口文档
 
-更新时间：2026-06-07
+更新时间：2026-06-09
 
 本文档基于当前项目源码整理，服务端入口为 `packages/server/src/index.ts`，路由集中在 `packages/server/src/routes`，实时通知在 `packages/server/src/ws/index.ts`。
 
@@ -13,7 +13,7 @@
 | 请求头 | `Content-Type: application/json` |
 | 鉴权方式 | `Authorization: Bearer <token>` |
 | Token 来源 | `POST /api/auth/login` |
-| 公开接口 | `/api/health`、`/api/auth/login`、`/api/orders`、`/api/orders/track/:trackingToken` |
+| 公开接口 | `/api/health`、`/api/ready`、`/api/auth/login`、`/api/orders`、`/api/orders/track/:trackingToken` |
 | Worker/Admin 接口 | 需要 Bearer Token |
 | WebSocket | Socket.IO，命名空间为 `/orders`、`/worker`、`/admin`，不带 `/api` 前缀 |
 
@@ -79,7 +79,7 @@
 
 | 项目 | 说明 |
 | --- | --- |
-| 外包凭证来源 | 后台“外包激活码池”，客户仍只提交本地兑换码和 ChatGPT session/accessToken |
+| 外包凭证来源 | 后台“外包兑换码管理”独立库存，客户仍只提交本地兑换码和 ChatGPT session/accessToken |
 | 外包 Base URL 默认值 | `https://scan.amazo.indevs.in` |
 | 外包处理中 | 本地订单保持 `PENDING_PAYMENT`，公开追踪页不展示 Pix 二维码、Pix 码或本地工人排队信息 |
 | 外包成功 | 外包状态 `paid` 映射为本地 `PAYMENT_COMPLETED`，`completedBy` 为空 |
@@ -90,7 +90,7 @@
 
 ### GET `/api/health`
 
-检查服务是否可用。
+轻量存活检查，只说明 API 进程仍在响应。
 
 请求：
 
@@ -106,6 +106,31 @@ curl http://localhost:3000/api/health
   "timestamp": "2026-06-02T00:00:00.000Z"
 }
 ```
+
+### GET `/api/ready`
+
+就绪检查，用于上线、负载均衡和监控探测。该接口会检查 PostgreSQL 和 Pix 生成队列连接。
+
+请求：
+
+```bash
+curl http://localhost:3000/api/ready
+```
+
+成功响应：
+
+```json
+{
+  "status": "ok",
+  "checks": {
+    "database": "ok",
+    "queue": "ok"
+  },
+  "timestamp": "2026-06-02T00:00:00.000Z"
+}
+```
+
+如果数据库或队列不可用，返回 `503`，`checks` 中对应项为 `error`。
 
 ## 3. 登录接口
 
@@ -326,7 +351,7 @@ Worker 接口统一需要 `WORKER` 或 `ADMIN` 权限。
 
 ### GET `/api/worker/orders`
 
-查询待支付订单队列。
+查询当前 Worker 已领取且仍有效的待支付订单。`/api/worker/orders/mine` 是同义接口，前端默认使用 `/mine`。
 
 权限：`WORKER`、`ADMIN`。
 
@@ -366,7 +391,17 @@ curl "http://localhost:3000/api/worker/orders?page=1&limit=50" \
 }
 ```
 
-说明：该接口只返回本地工人扫码订单，不返回外包自动支付订单。
+说明：该接口只返回当前 Worker 已领取的本地工人扫码订单，不返回外包自动支付订单，也不返回其他 Worker 已领取的订单。
+
+### GET `/api/worker/orders/available`
+
+查询当前可领取的本地工人扫码订单。该接口主要用于管理/排障；正常工人操作应使用批量领取接口。
+
+权限：`WORKER`、`ADMIN`。
+
+查询参数同 `/api/worker/orders`。
+
+说明：只返回 `paymentHandler=LOCAL_WORKER`、`PENDING_PAYMENT` 且未被有效领取或领取已过期的订单。
 
 ### GET `/api/worker/summary`
 
@@ -441,6 +476,34 @@ curl -X POST http://localhost:3000/api/worker/orders/claim-batch \
 
 说明：返回 `claimedCount=0` 表示当前没有可领取订单。批量领取只处理 `paymentHandler=LOCAL_WORKER`、`PENDING_PAYMENT` 且未被有效领取或领取已过期的订单；外包自动支付订单不会进入 Worker 领取队列。
 
+### POST `/api/worker/orders/:orderId/renew`
+
+续租当前 Worker 已领取的订单锁。前端会定时调用，防止任务被其他 Worker 重新领取。
+
+成功响应：
+
+```json
+{
+  "id": "order-id",
+  "claimExpiresAt": "2026-06-02T00:30:00.000Z"
+}
+```
+
+失败说明：如果订单已过期、已被释放、不是当前 Worker 领取，返回 `409`。
+
+### POST `/api/worker/orders/:orderId/release`
+
+释放当前 Worker 已领取的订单，让它重新回到可领取队列。
+
+成功响应：
+
+```json
+{
+  "id": "order-id",
+  "released": true
+}
+```
+
 ### POST `/api/worker/orders/:orderId/complete`
 
 将待支付订单标记为支付完成。
@@ -481,7 +544,7 @@ curl -X POST http://localhost:3000/api/worker/orders/order-id/complete \
 
 Admin 接口统一需要 `ADMIN` 权限。
 
-### 6.1 兑换码管理
+### 6.1 本地兑换码管理
 
 #### POST `/api/admin/redemption-codes`
 
@@ -527,7 +590,9 @@ curl -X POST http://localhost:3000/api/admin/redemption-codes \
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- | --- |
 | `status` | string | 否 | `all` | `unused`、`used`、`all` |
+| `archiveScope` | string | 否 | `active` | `active`、`archived`、`all` |
 | `batchLabel` | string | 否 | 无 | 批次标签 |
+| `search` | string | 否 | 无 | 搜索兑换码或批次 |
 | `page` | number | 否 | `1` | 页码 |
 | `limit` | number | 否 | `50` | 每页数量，最大 `100` |
 
@@ -541,6 +606,7 @@ curl -X POST http://localhost:3000/api/admin/redemption-codes \
       "code": "ABCD-2345",
       "batchLabel": "2026-06-02",
       "usedAt": null,
+      "archivedAt": null,
       "createdAt": "2026-06-02T00:00:00.000Z",
       "order": null
     }
@@ -548,6 +614,41 @@ curl -X POST http://localhost:3000/api/admin/redemption-codes \
   "total": 1,
   "page": 1,
   "limit": 50
+}
+```
+
+#### POST `/api/admin/redemption-codes/archive-used`
+
+按当前筛选归档已使用兑换码。未使用兑换码不会被归档。
+
+请求体：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `status` | string | 否 | `unused`、`used`、`all` |
+| `archiveScope` | string | 否 | `active`、`archived`、`all` |
+| `batchLabel` | string | 否 | 批次标签 |
+| `search` | string | 否 | 搜索兑换码或批次 |
+
+成功响应：
+
+```json
+{
+  "archivedCount": 10
+}
+```
+
+#### POST `/api/admin/redemption-codes/delete-unused`
+
+按当前筛选删除未使用兑换码。服务端会额外限制 `usedAt = null`；已使用兑换码应归档保留，不会被物理删除。
+
+请求体同 `archive-used`。
+
+成功响应：
+
+```json
+{
+  "deletedCount": 10
 }
 ```
 
@@ -606,12 +707,24 @@ curl -X POST http://localhost:3000/api/admin/redemption-codes \
 
 #### GET `/api/admin/workers`
 
-查询未删除的 Worker 列表。禁用账号仍会返回，方便管理员恢复；软删除账号不会返回。
+分页查询未删除的 Worker 列表。禁用账号仍会返回，方便管理员恢复；软删除账号不会返回。
+
+查询参数：
+
+| 参数 | 类型 | 必填 | 默认值 | 规则 | 说明 |
+| --- | --- | --- | --- | --- | --- |
+| `page` | number | 否 | `1` | 最小 `1` | 页码 |
+| `limit` | number | 否 | `50` | `1` 到 `100` | 每页数量 |
+| `status` | string | 否 | `all` | `all`、`enabled`、`disabled` | 按启用状态筛选 |
+| `search` | string | 否 | 无 | 最长 100 字符 | 按用户名或显示名称模糊搜索 |
 
 成功响应：
 
 ```json
 {
+  "total": 1,
+  "page": 1,
+  "limit": 20,
   "workers": [
     {
       "id": "worker-id",
@@ -689,6 +802,8 @@ curl -X POST http://localhost:3000/api/admin/redemption-codes \
 | `page` | number | 否 | `1` | 最小 `1` | 页码 |
 | `limit` | number | 否 | `50` | `1` 到 `100` | 每页数量 |
 | `status` | string | 否 | 无 | 订单状态枚举 | 按状态过滤 |
+| `paymentHandler` | string | 否 | 无 | `LOCAL_WORKER` 或 `OUTSOURCED_BUYER_API` | 按付款处理方式过滤 |
+| `trackingToken` | string | 否 | 无 | 最长 100 字符 | 按追踪码模糊搜索 |
 
 成功响应：
 
@@ -765,6 +880,7 @@ curl -X PATCH http://localhost:3000/api/admin/orders/order-id \
 | --- | --- |
 | `404` | 订单不存在 |
 | `409` | 当前订单状态不能取消 |
+| `409` | 已有外包票据的待支付订单不能直接取消，需要等待外包支付返回终态 |
 
 ### 6.4 看板
 
@@ -892,7 +1008,7 @@ curl -X PUT http://localhost:3000/api/admin/settings/proxy \
 }
 ```
 
-说明：接口不会返回完整外包激活码，只返回数量和脱敏预览。
+说明：接口不会返回完整外包兑换码，只返回数量和脱敏预览。
 
 #### PUT `/api/admin/settings/payment-processing`
 
@@ -904,7 +1020,6 @@ curl -X PUT http://localhost:3000/api/admin/settings/proxy \
 | --- | --- | --- | --- |
 | `handler` | string | 是 | `LOCAL_WORKER` 或 `OUTSOURCED_BUYER_API` |
 | `outsourcedBuyerApiBaseUrl` | string/null | 否 | 外包 API 根地址，必须是 http/https；填写 `/buyer` 会自动规整到站点根地址 |
-| `outsourcedActivationCodePool` | string/null | 否 | 外包激活码池，多行文本，每行一个激活码；省略该字段表示保留已保存码池，`null` 或空字符串表示清空 |
 
 请求示例：
 
@@ -912,10 +1027,140 @@ curl -X PUT http://localhost:3000/api/admin/settings/proxy \
 curl -X PUT http://localhost:3000/api/admin/settings/payment-processing \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <token>" \
-  -d "{\"handler\":\"OUTSOURCED_BUYER_API\",\"outsourcedBuyerApiBaseUrl\":\"https://scan.amazo.indevs.in\",\"outsourcedActivationCodePool\":\"DP-FIRST-CODE\\nDP-SECOND-CODE\"}"
+  -d "{\"handler\":\"OUTSOURCED_BUYER_API\",\"outsourcedBuyerApiBaseUrl\":\"https://scan.amazo.indevs.in\"}"
 ```
 
-成功响应同查询接口。外包激活码会加密保存，响应仍只返回数量和脱敏预览。
+成功响应同查询接口。外包兑换码导入、刷新、归档和删除走独立管理接口；旧客户端如果仍提交 `outsourcedActivationCodePool`，服务端会导入到外包兑换码表后清理旧设置项。
+
+### 6.6 外包兑换码管理
+
+外包兑换码用于 `OUTSOURCED_BUYER_API` 模式下向买家端 API 提交 Pix。完整明文只在服务端加密保存，列表接口只返回脱敏码和远端额度状态。
+
+#### POST `/api/admin/outsourced-activation-codes/import`
+
+批量导入外包兑换码。
+
+请求体：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `codesText` | string | 是 | 多行文本，每行一个外包兑换码；服务端会去空行、转大写、去重 |
+| `batchLabel` | string | 否 | 批次标签，便于筛选和归档 |
+
+成功响应：
+
+```json
+{
+  "importedCount": 2,
+  "duplicateCount": 0,
+  "totalInputCount": 2,
+  "batchLabel": "outsourced-001"
+}
+```
+
+#### GET `/api/admin/outsourced-activation-codes`
+
+分页查询外包兑换码库存。
+
+查询参数：
+
+| 参数 | 默认 | 说明 |
+| --- | --- | --- |
+| `page` | `1` | 页码 |
+| `limit` | `50` | 每页数量，最大 `100` |
+| `status` | `all` | `all`、`available`、`exhausted`、`error`、`unknown` |
+| `archiveScope` | `active` | `active`、`archived`、`all` |
+| `batchLabel` | 无 | 按批次精确筛选 |
+| `search` | 无 | 搜索脱敏码或批次 |
+
+成功响应：
+
+```json
+{
+  "codes": [
+    {
+      "id": "code-id",
+      "maskedCode": "DP-F...ODE",
+      "batchLabel": "outsourced-001",
+      "status": "AVAILABLE",
+      "lastRemaining": 2,
+      "lastUsed": 1,
+      "lastTotal": 3,
+      "localSubmitCount": 1,
+      "lastCheckedAt": "2026-06-09T00:00:00.000Z",
+      "lastError": null,
+      "exhaustedAt": null,
+      "archivedAt": null,
+      "createdAt": "2026-06-09T00:00:00.000Z",
+      "orderCount": 1
+    }
+  ],
+  "summary": {
+    "total": 1,
+    "available": 1,
+    "exhausted": 0,
+    "unknown": 0,
+    "checkFailed": 0,
+    "totalRemaining": 2,
+    "totalUsed": 1,
+    "localSubmitCount": 1
+  },
+  "total": 1,
+  "page": 1,
+  "limit": 50
+}
+```
+
+#### POST `/api/admin/outsourced-activation-codes/refresh`
+
+按当前筛选批量刷新远端剩余额度，每次最多检测 50 个。
+
+请求体同列表筛选字段，成功响应：
+
+```json
+{
+  "checked": 10,
+  "available": 8,
+  "exhausted": 1,
+  "failed": 1
+}
+```
+
+#### POST `/api/admin/outsourced-activation-codes/archive`
+
+按当前筛选批量归档外包兑换码。只会归档尚未归档的记录，历史订单关系保留。
+
+请求体同列表筛选字段，成功响应：
+
+```json
+{
+  "archivedCount": 3
+}
+```
+
+#### POST `/api/admin/outsourced-activation-codes/delete-unused`
+
+按当前筛选删除未使用的外包兑换码。服务端只会删除 `localSubmitCount = 0` 且没有关联订单的记录；已经提交过或关联过订单的码不会被删除，应使用归档。
+
+请求体同列表筛选字段，成功响应：
+
+```json
+{
+  "deletedCount": 2
+}
+```
+
+#### POST `/api/admin/outsourced-activation-codes/:id/refresh`
+
+刷新单个外包兑换码远端状态。
+
+#### POST `/api/admin/outsourced-activation-codes/:id/archive`
+
+归档单个外包兑换码。归档后默认列表不显示，但历史订单关系保留。
+
+#### DELETE `/api/admin/outsourced-activation-codes/:id`
+
+删除未使用过的外包兑换码。已经提交过或关联过订单的码不能删除，应使用归档。
 
 #### GET `/api/admin/settings/maintenance-mode`
 

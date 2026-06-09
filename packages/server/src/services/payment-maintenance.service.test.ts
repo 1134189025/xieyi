@@ -20,6 +20,7 @@ describe('payment-maintenance.service', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
@@ -42,6 +43,40 @@ describe('payment-maintenance.service', () => {
     );
 
     clearInterval(interval);
+  });
+
+  it('logs outsourced maintenance failures without exposing upstream details', async () => {
+    const logSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    detectOutsourcedPixPayments.mockRejectedValueOnce(Object.assign(
+      new Error('raw DP-FIRST-CODE 000201abcdefghijklmnopqrstuvwxyz1234567890pix'),
+      {
+        name: 'OutsourcedBuyerApiError',
+        code: 'OUTSOURCED_API_UNAVAILABLE',
+        statusCode: 502,
+        generationFailureDiagnostic: {
+          stage: 'outsourced_api',
+          httpStatus: 503,
+          detail: 'raw DP-FIRST-CODE 000201abcdefghijklmnopqrstuvwxyz1234567890pix',
+        },
+      },
+    ));
+
+    const { runPaymentMaintenanceOnce } = await import('./payment-maintenance.service.ts');
+    await runPaymentMaintenanceOnce();
+
+    expect(detectCompletedPixPayments).toHaveBeenCalledTimes(1);
+    expect(expirePendingOrders).toHaveBeenCalledTimes(1);
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Payment maintenance outsourced status failed'));
+
+    const logged = String(logSpy.mock.calls[0][0]);
+    expect(logged).toContain('code=OUTSOURCED_API_UNAVAILABLE');
+    expect(logged).toContain('stage=outsourced_api');
+    expect(logged).toContain('httpStatus=503');
+    expect(logged).not.toContain('DP-FIRST-CODE');
+    expect(logged).not.toContain('000201abcdefghijklmnopqrstuvwxyz1234567890pix');
+    expect(logged).not.toContain('detail');
+    expect(logged).not.toContain('raw');
   });
 });
 

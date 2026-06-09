@@ -11,9 +11,15 @@ const prisma = {
 
 const encrypt = vi.fn((plaintext: string) => `encrypted:${plaintext}`);
 const decrypt = vi.fn((ciphertext: string) => ciphertext.replace(/^encrypted:/, ''));
+const getOutsourcedActivationCodeSettingSummary = vi.fn();
+const importOutsourcedActivationCodes = vi.fn();
 
 vi.mock('../db.ts', () => ({ prisma }));
 vi.mock('../utils/crypto.ts', () => ({ encrypt, decrypt }));
+vi.mock('./outsourced-activation-code.service.ts', () => ({
+  getOutsourcedActivationCodeSettingSummary,
+  importOutsourcedActivationCodes,
+}));
 
 const {
   getAutoPaymentDetectionSetting,
@@ -38,6 +44,8 @@ describe('settings.service', () => {
     vi.clearAllMocks();
     vi.useRealTimers();
     prisma.systemSetting.findMany.mockResolvedValue([]);
+    getOutsourcedActivationCodeSettingSummary.mockResolvedValue({ count: 0, preview: [] });
+    importOutsourcedActivationCodes.mockResolvedValue({ importedCount: 0, duplicateCount: 0, totalInputCount: 0 });
   });
 
   it('normalizes one proxy line into a safe HTTP proxy URL', () => {
@@ -186,8 +194,13 @@ describe('settings.service', () => {
     await expect(updateAutoPaymentDetectionSetting(false)).resolves.toEqual({ enabled: false });
   });
 
-  it('saves outsourced payment processing settings with encrypted activation codes and safe previews', async () => {
+  it('imports outsourced activation codes into the managed code table when legacy payload is submitted', async () => {
     prisma.systemSetting.upsert.mockResolvedValue({});
+    prisma.systemSetting.deleteMany.mockResolvedValue({ count: 1 });
+    getOutsourcedActivationCodeSettingSummary.mockResolvedValue({
+      count: 2,
+      preview: ['DP-F...ODE', 'DP-S...ODE'],
+    });
     prisma.systemSetting.findUnique.mockImplementation(({ where }: { where: { key: string } }) => {
       if (where.key === 'payment_processing_handler') {
         return Promise.resolve({ key: where.key, value: 'OUTSOURCED_BUYER_API' });
@@ -215,18 +228,20 @@ describe('settings.service', () => {
       outsourcedActivationCodePreview: ['DP-F...ODE', 'DP-S...ODE'],
     });
 
-    expect(encrypt).toHaveBeenCalledWith('DP-FIRST-CODE');
-    expect(encrypt).toHaveBeenCalledWith('DP-SECOND-CODE');
+    expect(importOutsourcedActivationCodes).toHaveBeenCalledWith({
+      codesText: 'DP-FIRST-CODE\nDP-SECOND-CODE',
+      batchLabel: 'settings-import',
+    });
     expect(JSON.stringify(await getPaymentProcessingSetting())).not.toContain('DP-FIRST-CODE');
     await expect(getPaymentProcessingConfig()).resolves.toEqual({
       handler: 'OUTSOURCED_BUYER_API',
       outsourcedBuyerApiBaseUrl: 'https://scan.amazo.indevs.in',
-      outsourcedActivationCodes: ['DP-FIRST-CODE', 'DP-SECOND-CODE'],
+      outsourcedActivationCodes: [],
     });
   });
 
-  it('keeps outsourced activation code pool when admin saves handler without a pool field', async () => {
-    prisma.systemSetting.upsert.mockResolvedValue({});
+  it('migrates legacy outsourced activation code pool when payment processing config is read', async () => {
+    prisma.systemSetting.deleteMany.mockResolvedValue({ count: 1 });
     prisma.systemSetting.findUnique.mockImplementation(({ where }: { where: { key: string } }) => {
       if (where.key === 'payment_processing_handler') {
         return Promise.resolve({ key: where.key, value: 'OUTSOURCED_BUYER_API' });
@@ -235,7 +250,58 @@ describe('settings.service', () => {
         return Promise.resolve({ key: where.key, value: 'https://scan.amazo.indevs.in' });
       }
       if (where.key === 'outsourced_activation_code_pool') {
-        return Promise.resolve({ key: where.key, value: 'encrypted:DP-FIRST-CODE' });
+        return Promise.resolve({
+          key: where.key,
+          value: 'encrypted:DP-LEGACY-CODE\nencrypted:DP-LEGACY-TWO',
+        });
+      }
+      return Promise.resolve(null);
+    });
+
+    await expect(getPaymentProcessingConfig()).resolves.toEqual({
+      handler: 'OUTSOURCED_BUYER_API',
+      outsourcedBuyerApiBaseUrl: 'https://scan.amazo.indevs.in',
+      outsourcedActivationCodes: [],
+    });
+
+    expect(importOutsourcedActivationCodes).toHaveBeenCalledWith({
+      codesText: 'DP-LEGACY-CODE\nDP-LEGACY-TWO',
+      batchLabel: 'legacy-outsourced-import',
+    });
+    expect(prisma.systemSetting.deleteMany).toHaveBeenCalledWith({
+      where: { key: 'outsourced_activation_code_pool' },
+    });
+  });
+
+  it('rejects outsourced payment mode when no managed activation code is available', async () => {
+    prisma.systemSetting.upsert.mockResolvedValue({});
+    getOutsourcedActivationCodeSettingSummary.mockResolvedValue({ count: 0, preview: [] });
+
+    await expect(updatePaymentProcessingSetting({
+      handler: 'OUTSOURCED_BUYER_API',
+      outsourcedBuyerApiBaseUrl: 'https://scan.amazo.indevs.in',
+    })).rejects.toMatchObject({
+      statusCode: 400,
+      code: 'OUTSOURCED_CODE_REQUIRED',
+    });
+
+    expect(prisma.systemSetting.upsert).not.toHaveBeenCalledWith(
+      expect.objectContaining({ where: { key: 'payment_processing_handler' } }),
+    );
+  });
+
+  it('uses managed outsourced activation code summary when admin saves handler without a pool field', async () => {
+    prisma.systemSetting.upsert.mockResolvedValue({});
+    getOutsourcedActivationCodeSettingSummary.mockResolvedValue({
+      count: 1,
+      preview: ['DP-F...ODE'],
+    });
+    prisma.systemSetting.findUnique.mockImplementation(({ where }: { where: { key: string } }) => {
+      if (where.key === 'payment_processing_handler') {
+        return Promise.resolve({ key: where.key, value: 'OUTSOURCED_BUYER_API' });
+      }
+      if (where.key === 'outsourced_buyer_api_base_url') {
+        return Promise.resolve({ key: where.key, value: 'https://scan.amazo.indevs.in' });
       }
       return Promise.resolve(null);
     });
@@ -253,6 +319,7 @@ describe('settings.service', () => {
     expect(prisma.systemSetting.deleteMany).not.toHaveBeenCalledWith({
       where: { key: 'outsourced_activation_code_pool' },
     });
+    expect(importOutsourcedActivationCodes).not.toHaveBeenCalled();
   });
 
   it('defaults payment processing to local worker mode', async () => {

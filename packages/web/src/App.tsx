@@ -1,15 +1,18 @@
+import { lazy, Suspense, type ReactNode } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from './hooks/useAuth';
 import ProtectedRoute from './components/ProtectedRoute';
-import LoginPage from './pages/auth/LoginPage';
-import SubmitOrderPage from './pages/customer/SubmitOrderPage';
-import TrackOrderPage from './pages/customer/TrackOrderPage';
-import WorkerDashboard from './pages/worker/WorkerDashboard';
-import AdminDashboard from './pages/admin/AdminDashboard';
-import RedemptionCodesPage from './pages/admin/RedemptionCodesPage';
-import WorkerManagementPage from './pages/admin/WorkerManagementPage';
-import OrdersPage from './pages/admin/OrdersPage';
-import ProxySettingsPage from './pages/admin/ProxySettingsPage';
+
+const LoginPage = lazy(() => import('./pages/auth/LoginPage'));
+const SubmitOrderPage = lazy(() => import('./pages/customer/SubmitOrderPage'));
+const TrackOrderPage = lazy(() => import('./pages/customer/TrackOrderPage'));
+const WorkerDashboard = lazy(() => import('./pages/worker/WorkerDashboard'));
+const AdminDashboard = lazy(() => import('./pages/admin/AdminDashboard'));
+const RedemptionCodesPage = lazy(() => import('./pages/admin/RedemptionCodesPage'));
+const OutsourcedActivationCodesPage = lazy(() => import('./pages/admin/OutsourcedActivationCodesPage'));
+const WorkerManagementPage = lazy(() => import('./pages/admin/WorkerManagementPage'));
+const OrdersPage = lazy(() => import('./pages/admin/OrdersPage'));
+const ProxySettingsPage = lazy(() => import('./pages/admin/ProxySettingsPage'));
 
 export default function App() {
   const { user } = useAuth();
@@ -17,8 +20,8 @@ export default function App() {
   return (
     <Routes>
       {/* Customer pages - no auth */}
-      <Route path="/" element={<SubmitOrderPage />} />
-      <Route path="/track/:trackingToken" element={<TrackOrderPage />} />
+      <Route path="/" element={withPageLoading(<SubmitOrderPage />)} />
+      <Route path="/track/:trackingToken" element={withPageLoading(<TrackOrderPage />)} />
 
       {/* Auth */}
       <Route
@@ -27,7 +30,7 @@ export default function App() {
           user ? (
             <Navigate to={user.role === 'ADMIN' ? '/admin' : '/worker'} replace />
           ) : (
-            <LoginPage />
+            withPageLoading(<LoginPage />)
           )
         }
       />
@@ -36,9 +39,11 @@ export default function App() {
       <Route
         path="/worker"
         element={
-          <ProtectedRoute roles={['WORKER', 'ADMIN']}>
-            <WorkerDashboard />
-          </ProtectedRoute>
+          withPageLoading(
+            <ProtectedRoute roles={['WORKER', 'ADMIN']}>
+              <WorkerDashboard />
+            </ProtectedRoute>,
+          )
         }
       />
 
@@ -46,46 +51,81 @@ export default function App() {
       <Route
         path="/admin"
         element={
-          <ProtectedRoute roles={['ADMIN']}>
-            <AdminDashboard />
-          </ProtectedRoute>
+          withPageLoading(
+            <ProtectedRoute roles={['ADMIN']}>
+              <AdminDashboard />
+            </ProtectedRoute>,
+          )
         }
       />
       <Route
         path="/admin/codes"
         element={
-          <ProtectedRoute roles={['ADMIN']}>
-            <RedemptionCodesPage />
-          </ProtectedRoute>
+          withPageLoading(
+            <ProtectedRoute roles={['ADMIN']}>
+              <RedemptionCodesPage />
+            </ProtectedRoute>,
+          )
+        }
+      />
+      <Route
+        path="/admin/outsourced-activation-codes"
+        element={
+          withPageLoading(
+            <ProtectedRoute roles={['ADMIN']}>
+              <OutsourcedActivationCodesPage />
+            </ProtectedRoute>,
+          )
         }
       />
       <Route
         path="/admin/workers"
         element={
-          <ProtectedRoute roles={['ADMIN']}>
-            <WorkerManagementPage />
-          </ProtectedRoute>
+          withPageLoading(
+            <ProtectedRoute roles={['ADMIN']}>
+              <WorkerManagementPage />
+            </ProtectedRoute>,
+          )
         }
       />
       <Route
         path="/admin/orders"
         element={
-          <ProtectedRoute roles={['ADMIN']}>
-            <OrdersPage />
-          </ProtectedRoute>
+          withPageLoading(
+            <ProtectedRoute roles={['ADMIN']}>
+              <OrdersPage />
+            </ProtectedRoute>,
+          )
         }
       />
       <Route
         path="/admin/settings"
         element={
-          <ProtectedRoute roles={['ADMIN']}>
-            <ProxySettingsPage />
-          </ProtectedRoute>
+          withPageLoading(
+            <ProtectedRoute roles={['ADMIN']}>
+              <ProxySettingsPage />
+            </ProtectedRoute>,
+          )
         }
       />
 
       {/* Fallback */}
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
+  );
+}
+
+function withPageLoading(page: ReactNode) {
+  return <Suspense fallback={<PageLoading />}>{page}</Suspense>;
+}
+
+function PageLoading() {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-app-body">
+      <div
+        className="h-8 w-8 animate-spin rounded-full border-2 border-app-border border-t-app-accent"
+        aria-label="页面加载中"
+      />
+    </div>
   );
 }

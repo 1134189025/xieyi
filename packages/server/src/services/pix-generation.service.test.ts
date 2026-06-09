@@ -13,6 +13,10 @@ const parseChatGptSessionInput = vi.fn();
 const generatePixPayment = vi.fn();
 const selectOutsourcedActivationCode = vi.fn();
 const submitOutsourcedPixPayment = vi.fn();
+const findReservedOutsourcedActivationCodeForOrder = vi.fn();
+const recordOutsourcedActivationCodeSubmit = vi.fn();
+const reserveOutsourcedActivationCodeForOrder = vi.fn();
+const releaseOutsourcedActivationCodeReservation = vi.fn();
 const selectHealthyProxy = vi.fn();
 const recordProxySuccess = vi.fn();
 const recordProxyFailure = vi.fn();
@@ -29,6 +33,12 @@ vi.mock('./pix-payment.service.ts', () => ({ generatePixPayment }));
 vi.mock('./outsourced-payment.service.ts', () => ({
   selectOutsourcedActivationCode,
   submitOutsourcedPixPayment,
+}));
+vi.mock('./outsourced-activation-code.service.ts', () => ({
+  findReservedOutsourcedActivationCodeForOrder,
+  recordOutsourcedActivationCodeSubmit,
+  reserveOutsourcedActivationCodeForOrder,
+  releaseOutsourcedActivationCodeReservation,
 }));
 vi.mock('./settings.service.ts', () => ({
   selectHealthyProxy,
@@ -77,12 +87,19 @@ describe('pix-generation.service', () => {
     parseChatGptSessionInput.mockReturnValue(credential);
     selectHealthyProxy.mockResolvedValue(stripeProxy);
     shouldCountProxyFailure.mockReturnValue(false);
-    selectOutsourcedActivationCode.mockResolvedValue('DP-FIRST-CODE');
+    selectOutsourcedActivationCode.mockResolvedValue({
+      id: 'activation-code-1',
+      code: 'DP-FIRST-CODE',
+      maskedCode: 'DP-F...ODE',
+    });
+    findReservedOutsourcedActivationCodeForOrder.mockResolvedValue(null);
     submitOutsourcedPixPayment.mockResolvedValue({
       ticketId: 'Toutsource123',
       status: 'queued',
       message: '已提交，后台处理中',
     });
+    reserveOutsourcedActivationCodeForOrder.mockResolvedValue(true);
+    releaseOutsourcedActivationCodeReservation.mockResolvedValue(undefined);
     generatePixPayment.mockResolvedValue({
       stripeResult: {
         checkoutSessionId: 'cs_test_123',
@@ -166,15 +183,24 @@ describe('pix-generation.service', () => {
     await processPixGenerationJob({ orderId: 'order-1', finalAttempt: false });
 
     expect(selectOutsourcedActivationCode).toHaveBeenCalledTimes(1);
+    expect(findReservedOutsourcedActivationCodeForOrder).toHaveBeenCalledWith('order-1');
+    expect(reserveOutsourcedActivationCodeForOrder).toHaveBeenCalledWith({
+      codeId: 'activation-code-1',
+      orderId: 'order-1',
+    });
+    expect(reserveOutsourcedActivationCodeForOrder.mock.invocationCallOrder[0]).toBeLessThan(
+      submitOutsourcedPixPayment.mock.invocationCallOrder[0],
+    );
     expect(submitOutsourcedPixPayment).toHaveBeenCalledWith({
       activationCode: 'DP-FIRST-CODE',
       pixCode: 'pix-code',
     });
     expect(prisma.order.updateMany).toHaveBeenLastCalledWith({
-      where: { id: 'order-1', status: 'CREATING_PAYMENT' },
+      where: { id: 'order-1', status: 'CREATING_PAYMENT', outsourcedActivationCodeId: 'activation-code-1' },
       data: expect.objectContaining({
         status: 'PENDING_PAYMENT',
         paymentHandler: 'OUTSOURCED_BUYER_API',
+        outsourcedActivationCodeId: 'activation-code-1',
         outsourcedTicketId: 'Toutsource123',
         outsourcedPaymentStatus: 'queued',
         outsourcedSubmittedAt: expect.any(Date),
@@ -184,8 +210,101 @@ describe('pix-generation.service', () => {
         pixImageUrl: null,
       }),
     });
+    expect(recordOutsourcedActivationCodeSubmit).toHaveBeenCalledWith('activation-code-1');
+    expect(releaseOutsourcedActivationCodeReservation).not.toHaveBeenCalled();
     expect(broadcastOrderReady).not.toHaveBeenCalled();
     expect(broadcastOrderStatusChange).toHaveBeenCalledWith(pendingOrder);
+  });
+
+  it('外包重试时复用已经预关联的外包兑换码，避免订单卡在创建中', async () => {
+    const outsourcedOrder = {
+      ...queuedOrder(),
+      paymentHandler: 'OUTSOURCED_BUYER_API',
+      outsourcedActivationCodeId: 'activation-code-1',
+    };
+    const pendingOrder = {
+      ...outsourcedOrder,
+      status: 'PENDING_PAYMENT',
+      outsourcedTicketId: 'Toutsource123',
+      outsourcedPaymentStatus: 'queued',
+      pixCode: null,
+      pixQrPng: null,
+      pixImageUrl: null,
+      completedAt: null,
+    };
+    findReservedOutsourcedActivationCodeForOrder.mockResolvedValueOnce({
+      id: 'activation-code-1',
+      code: 'DP-FIRST-CODE',
+      maskedCode: 'DP-F...ODE',
+    });
+    prisma.order.findUnique.mockResolvedValueOnce(outsourcedOrder).mockResolvedValueOnce(pendingOrder);
+
+    await processPixGenerationJob({ orderId: 'order-1', finalAttempt: false });
+
+    expect(selectOutsourcedActivationCode).not.toHaveBeenCalled();
+    expect(reserveOutsourcedActivationCodeForOrder).not.toHaveBeenCalled();
+    expect(submitOutsourcedPixPayment).toHaveBeenCalledWith({
+      activationCode: 'DP-FIRST-CODE',
+      pixCode: 'pix-code',
+    });
+    expect(recordOutsourcedActivationCodeSubmit).toHaveBeenCalledWith('activation-code-1');
+    expect(broadcastOrderStatusChange).toHaveBeenCalledWith(pendingOrder);
+  });
+
+  it('外包兑换码预约冲突时抛出可重试错误，不静默结束创建中订单', async () => {
+    const outsourcedOrder = {
+      ...queuedOrder(),
+      paymentHandler: 'OUTSOURCED_BUYER_API',
+    };
+    prisma.order.findUnique.mockResolvedValueOnce(outsourcedOrder);
+    reserveOutsourcedActivationCodeForOrder.mockResolvedValueOnce(false);
+
+    await expect(processPixGenerationJob({ orderId: 'order-1', finalAttempt: false })).rejects.toMatchObject({
+      code: 'OUTSOURCED_CODE_RESERVATION_CONFLICT',
+      generationFailureDiagnostic: {
+        stage: 'outsourced_code_reservation',
+        detail: 'reservation_conflict',
+      },
+    });
+
+    expect(submitOutsourcedPixPayment).not.toHaveBeenCalled();
+    expect(recordOutsourcedActivationCodeSubmit).not.toHaveBeenCalled();
+  });
+
+  it('外包买家端 API 提交失败时释放已预关联的外包兑换码', async () => {
+    const outsourcedOrder = {
+      ...queuedOrder(),
+      paymentHandler: 'OUTSOURCED_BUYER_API',
+    };
+    const failedOrder = {
+      ...outsourcedOrder,
+      status: 'FAILED',
+      completedAt: null,
+    };
+    const submitError = Object.assign(new Error('submit failed'), {
+      code: 'OUTSOURCED_SUBMIT_FAILED',
+      generationFailureDiagnostic: {
+        stage: 'outsourced_submit',
+        detail: 'submit_failed',
+        httpStatus: null,
+      },
+    });
+    prisma.order.findUnique.mockResolvedValueOnce(outsourcedOrder).mockResolvedValueOnce(failedOrder);
+    submitOutsourcedPixPayment.mockRejectedValueOnce(submitError);
+
+    await processPixGenerationJob({ orderId: 'order-1', finalAttempt: false });
+
+    expect(reserveOutsourcedActivationCodeForOrder).toHaveBeenCalledWith({
+      codeId: 'activation-code-1',
+      orderId: 'order-1',
+    });
+    expect(releaseOutsourcedActivationCodeReservation).toHaveBeenCalledWith({
+      codeId: 'activation-code-1',
+      orderId: 'order-1',
+    });
+    expect(recordOutsourcedActivationCodeSubmit).not.toHaveBeenCalled();
+    expect(broadcastOrderReady).not.toHaveBeenCalled();
+    expect(broadcastOrderStatusChange).toHaveBeenCalledWith(failedOrder);
   });
 
   it('只有 Stripe 图片链接且没有 Pix 码串时仍进入待付款并落库图片', async () => {

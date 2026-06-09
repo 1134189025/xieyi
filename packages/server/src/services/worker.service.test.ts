@@ -9,6 +9,7 @@ const prisma = {
     updateMany: vi.fn(),
   },
   user: {
+    count: vi.fn(),
     findMany: vi.fn(),
     findUnique: vi.fn(),
     update: vi.fn(),
@@ -35,6 +36,7 @@ describe('worker.service', () => {
     prisma.order.count.mockResolvedValue(0);
     prisma.order.findFirst.mockResolvedValue(null);
     prisma.order.updateMany.mockResolvedValue({ count: 0 });
+    prisma.user.count.mockResolvedValue(0);
   });
 
   it('lists non-deleted workers with per-worker completed order counts', async () => {
@@ -86,6 +88,40 @@ describe('worker.service', () => {
         claimExpiresAt: { gt: expect.any(Date) },
       },
     });
+  });
+
+  it('lists a searched worker page with status filtering', async () => {
+    prisma.user.findMany.mockResolvedValue([]);
+    prisma.user.count.mockResolvedValue(12);
+
+    await expect(listWorkerAccountsForManagement({
+      status: 'enabled',
+      search: '张三',
+      page: 2,
+      limit: 20,
+    })).resolves.toEqual({
+      workers: [],
+      total: 12,
+      page: 2,
+      limit: 20,
+    });
+
+    const expectedWhere = {
+      role: 'WORKER',
+      deletedAt: null,
+      enabled: true,
+      OR: [
+        { username: { contains: '张三', mode: 'insensitive' } },
+        { displayName: { contains: '张三', mode: 'insensitive' } },
+      ],
+    };
+    expect(prisma.user.findMany).toHaveBeenCalledWith({
+      where: expectedWhere,
+      orderBy: { createdAt: 'desc' },
+      skip: 20,
+      take: 20,
+    });
+    expect(prisma.user.count).toHaveBeenCalledWith({ where: expectedWhere });
   });
 
   it('keeps disabled workers visible but clears their active claimed count', async () => {

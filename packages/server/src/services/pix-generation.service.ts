@@ -16,6 +16,13 @@ import {
   selectOutsourcedActivationCode,
   submitOutsourcedPixPayment,
 } from './outsourced-payment.service.ts';
+import {
+  findReservedOutsourcedActivationCodeForOrder,
+  recordOutsourcedActivationCodeSubmit,
+  releaseOutsourcedActivationCodeReservation,
+  reserveOutsourcedActivationCodeForOrder,
+  type SelectedOutsourcedActivationCode,
+} from './outsourced-activation-code.service.ts';
 
 const SAFE_PAYMENT_ERROR_CODE = 'PAYMENT_FAILED';
 const TERMINAL_GENERATION_ERROR_CODES = new Set([
@@ -183,14 +190,21 @@ async function submitGeneratedPixToOutsourcedBuyerApi(
     });
   }
 
-  const activationCode = await selectOutsourcedActivationCode();
-  const outsourcedSubmission = await submitOutsourcedPixPayment({
-    activationCode,
-    pixCode: generatedPix.pixCode,
-  });
+  const activationCode = await resolveOutsourcedActivationCodeReservation(orderId);
+
+  let outsourcedSubmission;
+  try {
+    outsourcedSubmission = await submitOutsourcedPixPayment({
+      activationCode: activationCode.code,
+      pixCode: generatedPix.pixCode,
+    });
+  } catch (error) {
+    await releaseOutsourcedActivationCodeReservation({ codeId: activationCode.id, orderId });
+    throw error;
+  }
 
   const changed = await prisma.order.updateMany({
-    where: { id: orderId, status: 'CREATING_PAYMENT' },
+    where: { id: orderId, status: 'CREATING_PAYMENT', outsourcedActivationCodeId: activationCode.id } as never,
     data: {
       status: 'PENDING_PAYMENT',
       paymentHandler: 'OUTSOURCED_BUYER_API',
@@ -207,6 +221,7 @@ async function submitGeneratedPixToOutsourcedBuyerApi(
       encryptedSessionData: null,
       generationFinishedAt: new Date(),
       generationErrorCode: null,
+      outsourcedActivationCodeId: activationCode.id,
       outsourcedTicketId: outsourcedSubmission.ticketId,
       outsourcedPaymentStatus: outsourcedSubmission.status,
       outsourcedLastError: null,
@@ -215,9 +230,32 @@ async function submitGeneratedPixToOutsourcedBuyerApi(
   });
   if (changed.count === 0) return;
 
+  await recordOutsourcedActivationCodeSubmit(activationCode.id);
+
   const updatedOrder = await prisma.order.findUnique({ where: { id: orderId } });
   if (!updatedOrder) return;
   broadcastOrderStatusChange(updatedOrder);
+}
+
+async function resolveOutsourcedActivationCodeReservation(orderId: string): Promise<SelectedOutsourcedActivationCode> {
+  const reservedCode = await findReservedOutsourcedActivationCodeForOrder(orderId);
+  if (reservedCode) return reservedCode;
+
+  const activationCode = await selectOutsourcedActivationCode();
+  const reserved = await reserveOutsourcedActivationCodeForOrder({
+    codeId: activationCode.id,
+    orderId,
+  });
+  if (reserved) return activationCode;
+
+  throw Object.assign(new Error('Outsourced activation code reservation was not acquired'), {
+    code: 'OUTSOURCED_CODE_RESERVATION_CONFLICT',
+    generationFailureDiagnostic: {
+      stage: 'outsourced_code_reservation',
+      detail: 'reservation_conflict',
+      httpStatus: null,
+    },
+  });
 }
 
 async function selectPixGenerationProxy(): Promise<{ poolName: ProxyPoolName | null; proxy: SelectedProxy | null }> {

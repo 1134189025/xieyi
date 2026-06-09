@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type Dispatch, type SetStateAction } from 'react';
 import api from '../../api/client';
 import { useAuth } from '../../hooks/useAuth';
 import { AUTO_REFRESH_INTERVAL_MS, useAutoRefresh } from '../../hooks/useAutoRefresh';
 import { useSocket } from '../../hooks/useSocket';
 import toast from 'react-hot-toast';
 import { CheckCircle, Copy, Loader2 } from 'lucide-react';
+import { safeErrorMessage } from '../../utils/labels';
 
 type WorkerViewMode = 'qr' | 'pix';
 
@@ -121,8 +122,8 @@ export default function WorkerDashboard() {
       setOrders((previousOrders) => previousOrders.filter((order) => order.id !== orderId));
       await fetchSummary();
       toast.success('订单已标记完成');
-    } catch {
-      toast.error('标记完成失败');
+    } catch (error) {
+      toast.error(safeErrorMessage(error, '标记完成失败'));
     } finally {
       setCompleting(null);
     }
@@ -150,9 +151,7 @@ export default function WorkerDashboard() {
     if (orders.length === 0) return;
 
     const interval = window.setInterval(() => {
-      void Promise.all(
-        orders.map((order) => api.post(`/worker/orders/${order.id}/renew`).catch(() => undefined)),
-      );
+      void renewVisibleOrders(orders, fetchOrders, fetchSummary, setOrders);
     }, 60_000);
 
     return () => window.clearInterval(interval);
@@ -179,7 +178,7 @@ export default function WorkerDashboard() {
               >
                 {claiming ? '领取中...' : '领取 10 单'}
               </button>
-              <div className="grid grid-cols-2 gap-2 rounded-xl bg-app-muted p-1">
+              <div className="grid grid-cols-2 gap-2 rounded-lg bg-neutral-100 p-1">
                 <button
                   type="button"
                   aria-pressed={viewMode === 'qr'}
@@ -266,7 +265,7 @@ function WorkerQrBlock({ order }: { order: OrderItem }) {
 
   if (!qrImageSrc && !instructionUrl) {
     return (
-      <div className="rounded-xl border border-dashed border-app-border p-6 text-center text-app-secondary">
+      <div className="rounded-lg border border-dashed border-app-border p-6 text-center text-app-secondary">
         暂无二维码
       </div>
     );
@@ -278,7 +277,7 @@ function WorkerQrBlock({ order }: { order: OrderItem }) {
         <img
           src={qrImageSrc}
           alt="Pix 二维码"
-          className="h-auto w-full max-w-[320px] rounded-xl border border-app-border bg-white p-3"
+          className="h-auto w-full max-w-[320px] rounded-lg border border-app-border bg-white p-3"
         />
       )}
       {instructionUrl && (
@@ -313,7 +312,7 @@ function WorkerPixCodeBlock({ pixCode }: { pixCode: string | null }) {
         <input
           readOnly
           value={pixCode ?? ''}
-          className="min-w-0 flex-1 rounded-lg border border-app-border bg-app-muted px-3 py-2 text-sm text-app-primary"
+          className="min-w-0 flex-1 rounded-lg border border-app-border bg-neutral-100 px-3 py-2 text-sm text-app-primary"
         />
         <button
           type="button"
@@ -346,6 +345,36 @@ function sortWorkerOrders(orders: OrderItem[]) {
     if (createdAtComparison !== 0) return createdAtComparison;
     return firstOrder.id.localeCompare(secondOrder.id);
   });
+}
+
+async function renewVisibleOrders(
+  orders: OrderItem[],
+  fetchOrders: (options?: FetchOrdersOptions) => Promise<void>,
+  fetchSummary: () => Promise<void>,
+  setOrders: Dispatch<SetStateAction<OrderItem[]>>,
+) {
+  const failedOrderIds = (
+    await Promise.all(
+      orders.map(async (order) => {
+        try {
+          await api.post(`/worker/orders/${order.id}/renew`);
+          return null;
+        } catch {
+          return order.id;
+        }
+      }),
+    )
+  ).filter((orderId): orderId is string => Boolean(orderId));
+
+  if (failedOrderIds.length === 0) return;
+
+  const failedOrderIdSet = new Set(failedOrderIds);
+  setOrders((previousOrders) => previousOrders.filter((order) => !failedOrderIdSet.has(order.id)));
+  toast.error('部分任务锁已失效，已刷新任务列表');
+  await Promise.all([
+    fetchOrders({ silent: true }),
+    fetchSummary().catch(() => undefined),
+  ]);
 }
 
 function isDirectImageUrl(value: string): boolean {

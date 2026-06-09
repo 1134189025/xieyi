@@ -2,6 +2,10 @@ import { createHash } from 'node:crypto';
 import { prisma } from '../db.ts';
 import { AppError } from '../middleware/error-handler.ts';
 import { decrypt, encrypt } from '../utils/crypto.ts';
+import {
+  getOutsourcedActivationCodeSettingSummary,
+  importOutsourcedActivationCodes,
+} from './outsourced-activation-code.service.ts';
 
 const CHATGPT_PROXY_POOL_KEY = 'chatgpt_proxy_pool';
 const STRIPE_PROXY_POOL_KEY = 'stripe_proxy_pool';
@@ -238,14 +242,16 @@ export async function updateMaintenanceModeSetting(enabled: boolean): Promise<Ma
 }
 
 export async function getPaymentProcessingSetting(): Promise<PaymentProcessingSettingView> {
-  return paymentProcessingView(await getPaymentProcessingConfig());
+  const config = await getPaymentProcessingConfig();
+  const activationCodeSummary = await getOutsourcedActivationCodeSettingSummary();
+  return paymentProcessingView(config, activationCodeSummary);
 }
 
 export async function getPaymentProcessingConfig(): Promise<PaymentProcessingConfig> {
-  const [handlerRow, baseUrlRow, activationCodePoolRow] = await Promise.all([
+  await migrateLegacyOutsourcedActivationCodePool();
+  const [handlerRow, baseUrlRow] = await Promise.all([
     prisma.systemSetting.findUnique({ where: { key: PAYMENT_PROCESSING_HANDLER_KEY } }),
     prisma.systemSetting.findUnique({ where: { key: OUTSOURCED_BUYER_API_BASE_URL_KEY } }),
-    prisma.systemSetting.findUnique({ where: { key: OUTSOURCED_ACTIVATION_CODE_POOL_KEY } }),
   ]);
 
   return {
@@ -253,7 +259,7 @@ export async function getPaymentProcessingConfig(): Promise<PaymentProcessingCon
     outsourcedBuyerApiBaseUrl: normalizeOutsourcedBuyerApiBaseUrl(
       baseUrlRow?.value || DEFAULT_OUTSOURCED_BUYER_API_BASE_URL,
     ),
-    outsourcedActivationCodes: decodeOutsourcedActivationCodePool(activationCodePoolRow?.value ?? ''),
+    outsourcedActivationCodes: [],
   };
 }
 
@@ -274,6 +280,21 @@ export async function updatePaymentProcessingSetting(input: {
     ? normalizeActivationCodePool(input.outsourcedActivationCodePool ?? '')
     : null;
 
+  if (activationCodes && activationCodes.length > 0) {
+    await importOutsourcedActivationCodes({
+      codesText: activationCodes.join('\n'),
+      batchLabel: 'settings-import',
+    });
+  }
+  if (shouldUpdateActivationCodePool) {
+    await prisma.systemSetting.deleteMany({ where: { key: OUTSOURCED_ACTIVATION_CODE_POOL_KEY } });
+  }
+
+  const activationCodeSummary = await getOutsourcedActivationCodeSettingSummary();
+  if (handler === 'OUTSOURCED_BUYER_API' && activationCodeSummary.count <= 0) {
+    throw new AppError(400, '请先导入外包兑换码，再开启外包自动支付', 'OUTSOURCED_CODE_REQUIRED');
+  }
+
   await Promise.all([
     prisma.systemSetting.upsert({
       where: { key: PAYMENT_PROCESSING_HANDLER_KEY },
@@ -285,14 +306,13 @@ export async function updatePaymentProcessingSetting(input: {
       create: { key: OUTSOURCED_BUYER_API_BASE_URL_KEY, value: outsourcedBuyerApiBaseUrl },
       update: { value: outsourcedBuyerApiBaseUrl },
     }),
-    ...(shouldUpdateActivationCodePool ? [saveOutsourcedActivationCodePool(activationCodes ?? [])] : []),
   ]);
 
   return paymentProcessingView({
     handler,
     outsourcedBuyerApiBaseUrl,
-    outsourcedActivationCodes: activationCodes ?? (await getPaymentProcessingConfig()).outsourcedActivationCodes,
-  });
+    outsourcedActivationCodes: [],
+  }, activationCodeSummary);
 }
 
 async function getProxyPoolSetting(poolName: ProxyPoolName): Promise<ProxyPoolSettingView> {
@@ -464,26 +484,29 @@ function decodeOutsourcedActivationCodePool(value: string): string[] {
     .filter(Boolean);
 }
 
-async function saveOutsourcedActivationCodePool(activationCodes: string[]): Promise<void> {
-  if (activationCodes.length === 0) {
-    await prisma.systemSetting.deleteMany({ where: { key: OUTSOURCED_ACTIVATION_CODE_POOL_KEY } });
-    return;
-  }
+async function migrateLegacyOutsourcedActivationCodePool(): Promise<void> {
+  const legacySetting = await prisma.systemSetting.findUnique({ where: { key: OUTSOURCED_ACTIVATION_CODE_POOL_KEY } });
+  if (!legacySetting?.value.trim()) return;
 
-  const encryptedCodes = activationCodes.map((code) => encrypt(code)).join('\n');
-  await prisma.systemSetting.upsert({
-    where: { key: OUTSOURCED_ACTIVATION_CODE_POOL_KEY },
-    create: { key: OUTSOURCED_ACTIVATION_CODE_POOL_KEY, value: encryptedCodes },
-    update: { value: encryptedCodes },
-  });
+  const activationCodes = decodeOutsourcedActivationCodePool(legacySetting.value);
+  if (activationCodes.length > 0) {
+    await importOutsourcedActivationCodes({
+      codesText: activationCodes.join('\n'),
+      batchLabel: 'legacy-outsourced-import',
+    });
+  }
+  await prisma.systemSetting.deleteMany({ where: { key: OUTSOURCED_ACTIVATION_CODE_POOL_KEY } });
 }
 
-function paymentProcessingView(config: PaymentProcessingConfig): PaymentProcessingSettingView {
+function paymentProcessingView(
+  config: PaymentProcessingConfig,
+  activationCodeSummary?: { count: number; preview: string[] },
+): PaymentProcessingSettingView {
   return {
     handler: config.handler,
     outsourcedBuyerApiBaseUrl: config.outsourcedBuyerApiBaseUrl,
-    outsourcedActivationCodeCount: config.outsourcedActivationCodes.length,
-    outsourcedActivationCodePreview: config.outsourcedActivationCodes.map(maskActivationCode),
+    outsourcedActivationCodeCount: activationCodeSummary?.count ?? config.outsourcedActivationCodes.length,
+    outsourcedActivationCodePreview: activationCodeSummary?.preview ?? config.outsourcedActivationCodes.map(maskActivationCode),
   };
 }
 
